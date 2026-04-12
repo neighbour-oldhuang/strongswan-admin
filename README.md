@@ -15,14 +15,32 @@
 # 需要 root（写入 /etc/swanctl/）
 sudo apt install strongswan   # 若未安装
 
-git clone / 复制本目录到服务器
-sudo bash start.sh
-# 默认监听 http://0.0.0.0:8080
+git clone git@github.com:neighbour-oldhuang/strongswan-admin.git
+cd strongswan-admin
 ```
 
-自定义端口：
+首次运行会自动创建 `.venv` 虚拟环境并安装依赖。
+
+## start.sh 用法
+
+| 命令 | 说明 |
+|------|------|
+| `sudo bash start.sh` | 前台启动（默认端口 8080） |
+| `sudo bash start.sh -d` | 后台启动，日志写入 `strongswan-admin.log` |
+| `sudo bash start.sh stop` | 停止后台进程 |
+
+自定义参数（通过环境变量）：
+
 ```bash
-sudo PORT=9000 bash start.sh
+sudo PORT=9000 bash start.sh          # 自定义端口，前台
+sudo PORT=9000 RELOAD=0 bash start.sh -d  # 关闭热重载，后台启动
+```
+
+后台运行时 PID 记录在 `strongswan-admin.pid`，日志在 `strongswan-admin.log`：
+
+```bash
+tail -f strongswan-admin.log   # 查看日志
+sudo bash start.sh stop        # 停止服务
 ```
 
 ## 配置说明
