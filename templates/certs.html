@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>证书管理 — StrongSwan Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+
+{% if ok  %}<div class="flash flash-ok">✓ {{ ok }}</div>{% endif %}
+{% if err %}<div class="flash flash-err">✗ {{ err }}</div>{% endif %}
+
+<!-- Generate -->
+<div class="card">
+  <div class="card-title">自动生成自签名证书</div>
+  <form method="post" action="/certs/generate">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+      <div class="field">
+        <label>Common Name (CN)</label>
+        <input type="text" name="cn" placeholder="vpn.example.com 或 IP" required>
+        <span class="hint">用于证书标识，建议填本机域名或 IP</span>
+      </div>
+      <div class="field">
+        <label>有效期（天）</label>
+        <input type="number" name="days" value="3650" min="1">
+      </div>
+      <button type="submit" class="btn btn-primary">🔑 生成证书</button>
+    </div>
+  </form>
+  <p style="font-size:12px;color:var(--muted);margin-top:8px">
+    将生成 CA 证书、本端证书和私钥，文件名以 CN 命名，自动写入对应目录。
+  </p>
+</div>
+
+<!-- Upload -->
+<div class="card">
+  <div class="card-title">上传证书 / 密钥</div>
+  <form method="post" action="/certs/upload" enctype="multipart/form-data">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+      <div class="field">
+        <label>类型</label>
+        <select name="cert_type">
+          <option value="ca">CA 证书 (/etc/swanctl/x509ca)</option>
+          <option value="local">本端证书 (/etc/swanctl/x509)</option>
+          <option value="key">私钥 (/etc/swanctl/private)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>文件</label>
+        <input type="file" name="file" required style="color:var(--text)">
+      </div>
+      <button type="submit" class="btn btn-primary">上传</button>
+    </div>
+  </form>
+</div>
+
+{% macro cert_table(title, files, cert_type) %}
+<div class="card">
+  <div class="card-title">{{ title }}</div>
+  {% if files %}
+  <table>
+    <thead><tr><th>文件名</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for f in files %}
+    <tr>
+      <td>{{ f.name }}</td>
+      <td>
+        <form method="post" action="/certs/delete" style="display:inline">
+          <input type="hidden" name="cert_type" value="{{ cert_type }}">
+          <input type="hidden" name="filename" value="{{ f.name }}">
+          <button class="btn btn-danger btn-sm" data-confirm="确认删除 {{ f.name }}？">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:var(--muted)">暂无文件</p>
+  {% endif %}
+</div>
+{% endmacro %}
+
+<div class="grid2">
+  {{ cert_table('CA 证书', ca_certs, 'ca') }}
+  {{ cert_table('本端证书', local_certs, 'local') }}
+</div>
+{{ cert_table('私钥', private_keys, 'key') }}
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

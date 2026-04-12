@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>系统配置 — StrongSwan Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+
+{% if ok %}<div class="flash flash-ok">✓ {{ ok }}</div>{% endif %}
+{% if err %}<div class="flash flash-err">✗ {{ err }}</div>{% endif %}
+
+<!-- sysctl -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span class="card-title" style="margin:0">内核参数（IPSec 必需）</span>
+    <form method="post" action="/system/sysctl/apply">
+      <button class="btn btn-primary btn-sm">⚡ 一键应用推荐值并持久化</button>
+    </form>
+  </div>
+  <table id="sysctl-table" style="font-size:13px">
+    <thead><tr><th>参数</th><th>当前值</th><th>推荐值</th><th>状态</th></tr></thead>
+    <tbody id="sysctl-body"><tr><td colspan="4" style="color:var(--muted)">加载中…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- routes -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span class="card-title" style="margin:0">路由表</span>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm" onclick="loadRoutes()">↻ 刷新</button>
+      <button class="btn btn-primary btn-sm" onclick="openRouteModal()">＋ 添加路由</button>
+    </div>
+  </div>
+  <table id="route-table" style="font-size:13px">
+    <thead><tr><th>目标网段</th><th>下一跳</th><th>网卡</th><th>协议</th><th>操作</th></tr></thead>
+    <tbody id="route-body"><tr><td colspan="5" style="color:var(--muted)">加载中…</td></tr></tbody>
+  </table>
+</div>
+
+{% include '_route_modal.html' %}
+
+<script>
+async function loadSysctls() {
+  const res = await fetch('/api/sysctls');
+  const data = await res.json();
+  document.getElementById('sysctl-body').innerHTML = Object.entries(data).map(([k, v]) =>
+    `<tr>
+      <td style="font-family:monospace;font-size:12px">${k}</td>
+      <td>${v.current || '—'}</td>
+      <td>${v.recommended}</td>
+      <td>${v.ok ? '<span class="badge badge-green">✓ 符合</span>' : '<span class="badge badge-red">⚠ 不符</span>'}</td>
+    </tr>`
+  ).join('');
+}
+
+async function loadRoutes() {
+  const res = await fetch('/api/routes');
+  const { routes } = await res.json();
+  const rows = (routes || '').trim().split('\n').filter(Boolean).map(line => {
+    // 解析 ip route show 输出：dst [via gw] [dev iface] [proto x] ...
+    const dst   = line.match(/^(\S+)/)?.[1] || '';
+    const via   = line.match(/via (\S+)/)?.[1] || '—';
+    const dev   = line.match(/dev (\S+)/)?.[1] || '—';
+    const proto = line.match(/proto (\S+)/)?.[1] || '—';
+    return `<tr>
+      <td><strong>${dst}</strong></td>
+      <td>${via}</td>
+      <td>${dev}</td>
+      <td><span class="badge badge-gray" style="font-size:11px">${proto}</span></td>
+      <td><button class="btn btn-danger btn-sm" onclick="delRoute('${dst}','${via === '—' ? '' : via}','${dev === '—' ? '' : dev}')">删除</button></td>
+    </tr>`;
+  });
+  document.getElementById('route-body').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5" style="color:var(--muted);text-align:center">暂无路由</td></tr>';
+}
+
+async function delRoute(dst, via, dev) {
+  if (!confirm(`确认删除路由 ${dst}？`)) return;
+  const fd = new FormData();
+  fd.append('dst', dst); fd.append('via', via); fd.append('dev', dev);
+  await fetch('/system/route/del', {method:'POST', body: fd});
+  loadRoutes();
+}
+
+loadSysctls();
+loadRoutes();
+</script>
+</body>
+</html>

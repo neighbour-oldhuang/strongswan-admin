@@ -1,0 +1,7 @@
+<nav class="nav">
+  <span class="brand">🔐 StrongSwan Admin</span>
+  <a href="/" {% if active_nav == 'home' %}class="active"{% endif %}>仪表盘</a>
+  <a href="/connections/new" {% if active_nav == 'conn' %}class="active"{% endif %}>新建连接</a>
+  <a href="/certs" {% if active_nav == 'certs' %}class="active"{% endif %}>证书管理</a>
+  <a href="/system" {% if active_nav == 'system' %}class="active"{% endif %}>系统配置</a>
+</nav>

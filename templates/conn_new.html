@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>新建连接 — StrongSwan Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+<div class="card" style="max-width:600px;margin:40px auto">
+  <div class="card-title">选择 VPN 类型</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
+    <a href="/connections/new/policy" class="btn btn-ghost" style="padding:24px;text-align:center;display:block">
+      <div style="font-size:28px;margin-bottom:8px">🛡️</div>
+      <div style="font-weight:600;margin-bottom:6px">Policy-Based</div>
+      <div style="font-size:12px;color:var(--muted)">基于策略匹配子网<br>兼容传统防火墙/路由器</div>
+    </a>
+    <a href="/connections/new/route" class="btn btn-ghost" style="padding:24px;text-align:center;display:block">
+      <div style="font-size:28px;margin-bottom:8px">🔀</div>
+      <div style="font-weight:600;margin-bottom:6px">Route-Based</div>
+      <div style="font-size:12px;color:var(--muted)">基于路由表控制流量<br>支持动态路由/多路径</div>
+    </a>
+  </div>
+</div>
+</div>
+</body>
+</html>

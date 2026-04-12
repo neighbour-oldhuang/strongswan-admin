@@ -1,0 +1,372 @@
+from fastapi import FastAPI, Request, Form, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
+import store, ctl, shutil, os
+
+app = FastAPI(title="StrongSwan Admin")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def flash(request: Request, msg: str, ok=True):
+    # store in query param for simplicity (no session dep)
+    pass
+
+def redirect(path, msg="", ok=True):
+    sep = "?" if "?" not in path else "&"
+    tag = "ok" if ok else "err"
+    return RedirectResponse(f"{path}{sep}{tag}={msg}", status_code=303)
+
+# ── pages ─────────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    data = store.load()
+    st = ctl.status()
+    installed = ctl.is_installed()
+    return templates.TemplateResponse("index.html", {
+        "request": request, "data": data,
+        "status": st, "installed": installed,
+        "ok": request.query_params.get("ok"),
+        "err": request.query_params.get("err"),
+    })
+
+# ── system config (sysctl + routes) ──────────────────────────────────────────
+
+@app.get("/system", response_class=HTMLResponse)
+async def system_page(request: Request):
+    return templates.TemplateResponse("system.html", {
+        "request": request,
+        "ok":  request.query_params.get("ok"),
+        "err": request.query_params.get("err"),
+    })
+
+@app.get("/api/sysctls")
+async def api_sysctls():
+    return JSONResponse(ctl.get_sysctls())
+
+@app.post("/system/sysctl/apply")
+async def sysctl_apply():
+    code, out, err = ctl.apply_sysctls()
+    return redirect("/", out or err or "内核参数已应用并持久化", code == 0)
+
+@app.get("/api/routes")
+async def api_routes():
+    return JSONResponse({"routes": ctl.get_routes()})
+
+@app.post("/system/route/add")
+async def route_add(request: Request, dst: str = Form(...), via: str = Form(""), dev: str = Form("")):
+    code, out, err = ctl.add_route(dst.strip(), via.strip(), dev.strip())
+    if request.headers.get("accept") == "application/json":
+        return JSONResponse({"ok": code == 0, "msg": out or err})
+    return redirect("/system", out or err or f"路由 {dst} 已添加", code == 0)
+
+@app.post("/system/route/del")
+async def route_del(request: Request, dst: str = Form(...), via: str = Form(""), dev: str = Form("")):
+    code, out, err = ctl.del_route(dst.strip(), via.strip(), dev.strip())
+    if request.headers.get("accept") == "application/json":
+        return JSONResponse({"ok": code == 0, "msg": out or err})
+    return redirect("/system", out or err or f"路由 {dst} 已删除", code == 0)
+
+# ── instance control ──────────────────────────────────────────────────────────
+
+@app.get("/instance/install")
+async def inst_install():
+    def event_stream():
+        for line in ctl.install():
+            yield f"data: {line}\n\n"
+        yield "data: __DONE__\n\n"
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+@app.post("/instance/start")
+async def inst_start():
+    code, out, err = ctl.start()
+    msg = out or err or "done"
+    return redirect("/", msg, code == 0)
+
+@app.post("/instance/stop")
+async def inst_stop():
+    code, out, err = ctl.stop()
+    return redirect("/", out or err or "done", code == 0)
+
+@app.post("/instance/restart")
+async def inst_restart():
+    code, out, err = ctl.restart()
+    return redirect("/", out or err or "done", code == 0)
+
+@app.post("/instance/reload")
+async def inst_reload():
+    code, out, err = ctl.reload()
+    return redirect("/", out or err or "done", code == 0)
+
+# ── connections ───────────────────────────────────────────────────────────────
+
+_COMMON_FIELDS = [
+    ("name",          "连接名称",       "text",   "my-vpn",          "唯一标识，仅字母数字和连字符"),
+    ("ike_version",   "IKE 版本",       "select", "2",               "IKEv2 更安全推荐；IKEv1 兼容旧设备"),
+    ("local_addr",    "本端地址",        "text",   "%any",            "本机 IP 或 %any（自动）"),
+    ("remote_addr",   "对端地址",        "text",   "1.2.3.4",         "对端网关 IP 或域名"),
+    ("auth_local",    "本端认证方式",    "select", "psk",             "psk=预共享密钥；pubkey=证书"),
+    ("auth_remote",   "对端认证方式",    "select", "psk",             "同上"),
+    ("psk",           "预共享密钥 PSK", "password","",               "auth=psk 时填写，双端必须一致"),
+    ("local_cert",    "本端证书文件名",  "text",   "",                "pubkey 认证时，/etc/swanctl/x509/ 下的文件名"),
+    ("remote_cert",   "对端证书文件名",  "text",   "",                "pubkey 认证时，/etc/swanctl/x509ca/ 下的 CA 文件名"),
+    ("proposals",     "IKE 加密提案",   "select", "aes256-sha256-modp2048", "格式：加密-完整性-DH组，如 modp2048=DH14、modp1024=DH2、ecp256=DH19、ecp384=DH20，需与对端一致"),
+    ("esp_proposals", "ESP 加密提案",   "select", "aes256-sha256",          "格式：加密-完整性，对应对端 IPSec/ESP 算法配置，需与对端一致"),
+    ("start_action",  "启动动作",        "select", "none",            "none=手动；start=自动发起；trap=按需触发"),
+]
+
+_ADVANCED_FIELDS = [
+    ("local_id",      "本端 ID",        "text",   "",                "IKE 身份标识，留空使用地址"),
+    ("remote_id",     "对端 ID",        "text",   "",                "对端身份标识，留空使用地址"),
+    ("dpd_action",    "DPD 动作",       "select", "restart",         "对端失联后动作：clear=清除；restart=重连；none=忽略"),
+    ("dpd_delay",     "DPD 检测间隔(s)","select", "30",              "Dead Peer Detection 心跳间隔秒数"),
+    ("dpd_timeout",   "DPD 超时(s)",    "select", "150",             "超过此时间无响应则触发 DPD 动作"),
+    ("keyingtries",   "重协商次数",      "select", "0",               "0=永久重试；3/5=固定次数；swanctl不支持%forever"),
+]
+
+# policy-based 独有字段
+POLICY_FIELDS = _COMMON_FIELDS + [
+    ("local_ts",  "本端子网", "datalist", "0.0.0.0/0", "本端允许通过 VPN 的流量范围"),
+    ("remote_ts", "对端子网", "datalist", "0.0.0.0/0", "对端允许通过 VPN 的流量范围"),
+    ("mode",      "隧道模式", "select", "tunnel",   "tunnel=隧道模式（常用）；transport=传输模式"),
+]
+
+# route-based 独有字段（去掉 local_ts/remote_ts/mode，后端硬编码）
+ROUTE_FIELDS = _COMMON_FIELDS[:]
+
+CONN_FIELDS = POLICY_FIELDS  # 兼容编辑时的默认值
+
+ADVANCED_KEYS = {f[0] for f in _ADVANCED_FIELDS}
+
+SELECT_OPTIONS = {
+    "ike_version":  ["2", "1"],
+    "auth_local":   ["psk", "pubkey", "eap-mschapv2", "eap-radius"],
+    "auth_remote":  ["psk", "pubkey", "eap-mschapv2", "eap-radius"],
+    "mode":         ["tunnel", "transport"],
+    "start_action": ["none", "start", "trap"],
+    "dpd_action":   ["restart", "clear", "none"],
+    "proposals":    [
+        "aes256gcm16-prfsha384-ecp384",
+        "aes256-sha256-modp2048",
+        "aes128-sha256-modp2048",
+        "aes128-sha1-modp1024",
+        "aes256-sha256-modp1024",
+    ],
+    "esp_proposals": [
+        "aes256gcm16-ecp384",
+        "aes256-sha256",
+        "aes128-sha256",
+        "aes128-sha1",
+        "aes256-sha1",
+    ],
+    "dpd_delay":    ["10", "30", "60", "120"],
+    "dpd_timeout":  ["60", "150", "300"],
+    "keyingtries":  ["0", "3", "5", "10"],
+}
+
+def _fields_for(conn: dict):
+    """根据已保存连接判断用哪套字段"""
+    return ROUTE_FIELDS if conn.get("use_xfrm") else POLICY_FIELDS
+
+def _cert_lists():
+    def ls(p): return sorted(f.name for f in Path(p).glob("*") if f.is_file()) if Path(p).exists() else []
+    return {
+        "local_certs": ls("/etc/swanctl/x509"),
+        "ca_certs":    ls("/etc/swanctl/x509ca"),
+    }
+
+@app.get("/connections/new", response_class=HTMLResponse)
+async def conn_new(request: Request):
+    return templates.TemplateResponse("conn_new.html", {"request": request})
+
+@app.get("/connections/new/policy", response_class=HTMLResponse)
+async def conn_new_policy(request: Request):
+    return templates.TemplateResponse("conn_form.html", {
+        "request": request, "fields": POLICY_FIELDS, "adv_fields": _ADVANCED_FIELDS,
+        "select_options": SELECT_OPTIONS, **_cert_lists(),
+        "conn": {}, "edit": False, "vpn_type": "policy",
+        "err": request.query_params.get("err"),
+    })
+
+@app.get("/connections/new/route", response_class=HTMLResponse)
+async def conn_new_route(request: Request):
+    return templates.TemplateResponse("conn_form.html", {
+        "request": request, "fields": ROUTE_FIELDS, "adv_fields": _ADVANCED_FIELDS,
+        "select_options": SELECT_OPTIONS, **_cert_lists(),
+        "conn": {}, "edit": False, "vpn_type": "route",
+        "err": request.query_params.get("err"),
+    })
+
+@app.post("/connections/new")
+async def conn_create(request: Request):
+    form = await request.form()
+    data = store.load()
+    name = form.get("name", "").strip()
+    vpn_type = form.get("vpn_type", "policy")
+    fields = ROUTE_FIELDS if vpn_type == "route" else POLICY_FIELDS
+    if not name:
+        return redirect(f"/connections/new/{vpn_type}", "连接名称不能为空", False)
+    if name in data["connections"]:
+        return redirect(f"/connections/new/{vpn_type}", f"连接 {name} 已存在", False)
+    data["connections"][name] = {k: form.get(k, "").strip() for k, *_ in fields + _ADVANCED_FIELDS if k != "name"}
+    data["connections"][name]["use_xfrm"] = (vpn_type == "route")
+    store.save(data)
+    try:
+        ctl.write_swanctl(data["connections"])
+    except Exception as e:
+        return redirect("/", f"配置已保存但写入失败: {e}", False)
+    return redirect("/", f"连接 {name} 已创建")
+
+@app.get("/connections/{name}/edit", response_class=HTMLResponse)
+async def conn_edit(request: Request, name: str):
+    data = store.load()
+    conn = data["connections"].get(name)
+    if not conn:
+        return redirect("/", "连接不存在", False)
+    conn["name"] = name
+    fields = _fields_for(conn)
+    vpn_type = "route" if conn.get("use_xfrm") else "policy"
+    return templates.TemplateResponse("conn_form.html", {
+        "request": request, "fields": fields, "adv_fields": _ADVANCED_FIELDS,
+        "select_options": SELECT_OPTIONS, **_cert_lists(),
+        "conn": conn, "edit": True, "vpn_type": vpn_type,
+        "err": request.query_params.get("err"),
+    })
+
+@app.post("/connections/{name}/edit")
+async def conn_update(request: Request, name: str):
+    form = await request.form()
+    data = store.load()
+    if name not in data["connections"]:
+        return redirect("/", "连接不存在", False)
+    vpn_type = form.get("vpn_type", "policy")
+    fields = ROUTE_FIELDS if vpn_type == "route" else POLICY_FIELDS
+    data["connections"][name] = {k: form.get(k, "").strip() for k, *_ in fields + _ADVANCED_FIELDS if k != "name"}
+    data["connections"][name]["use_xfrm"] = (vpn_type == "route")
+    store.save(data)
+    try:
+        ctl.write_swanctl(data["connections"])
+    except Exception as e:
+        return redirect("/", f"配置已保存但写入失败: {e}", False)
+    return redirect("/", f"连接 {name} 已更新")
+
+@app.post("/connections/{name}/delete")
+async def conn_delete(name: str):
+    data = store.load()
+    data["connections"].pop(name, None)
+    store.save(data)
+    try:
+        ctl.write_swanctl(data["connections"])
+    except Exception:
+        pass
+    return redirect("/", f"连接 {name} 已删除")
+
+@app.post("/connections/{name}/up")
+async def conn_up(name: str):
+    code, out, err = ctl.run_bg(f"ipsec up {name}" if not shutil.which("swanctl") else f"swanctl --initiate --child {name}_child")
+    return redirect("/", out or err or "done", code == 0)
+
+@app.post("/connections/{name}/down")
+async def conn_down(name: str):
+    code, out, err = ctl.run_bg(f"ipsec down {name}" if not shutil.which("swanctl") else f"swanctl --terminate --ike {name}")
+    return redirect("/", out or err or "done", code == 0)
+
+# ── certificates ──────────────────────────────────────────────────────────────
+
+@app.get("/certs", response_class=HTMLResponse)
+async def certs_page(request: Request):
+    def ls(p): return sorted(Path(p).glob("*")) if Path(p).exists() else []
+    return templates.TemplateResponse("certs.html", {
+        "request": request,
+        "ca_certs":    ls("/etc/swanctl/x509ca"),
+        "local_certs": ls("/etc/swanctl/x509"),
+        "private_keys":ls("/etc/swanctl/private"),
+        "ok":  request.query_params.get("ok"),
+        "err": request.query_params.get("err"),
+    })
+
+@app.post("/certs/upload")
+async def cert_upload(cert_type: str = Form(...), file: UploadFile = File(...)):
+    dirs = {"ca": "/etc/swanctl/x509ca", "local": "/etc/swanctl/x509", "key": "/etc/swanctl/private"}
+    d = dirs.get(cert_type)
+    if not d:
+        return redirect("/certs", "未知类型", False)
+    os.makedirs(d, exist_ok=True)
+    dest = Path(d) / file.filename
+    content = await file.read()
+    dest.write_bytes(content)
+    return redirect("/certs", f"{file.filename} 上传成功")
+
+@app.post("/certs/delete")
+async def cert_delete(cert_type: str = Form(...), filename: str = Form(...)):
+    dirs = {"ca": "/etc/swanctl/x509ca", "local": "/etc/swanctl/x509", "key": "/etc/swanctl/private"}
+    d = dirs.get(cert_type)
+    if d:
+        p = Path(d) / filename
+        if p.exists(): p.unlink()
+    return redirect("/certs", f"{filename} 已删除")
+
+# ── status / logs API ─────────────────────────────────────────────────────────
+
+@app.get("/api/sa-status")
+async def api_sa_status():
+    """返回 {连接名: {state, detail}} """
+    _, out, _ = ctl.run("swanctl --list-sas 2>/dev/null || ipsec statusall 2>/dev/null")
+    result = {}
+    current = None
+    detail_lines = []
+    for line in out.splitlines():
+        # 新连接块开始：以连接名开头，如 "myipsec: #1, ESTABLISHED ..."
+        import re
+        m = re.match(r'^(\S+?):\s+#\d+,\s+(\w+)', line)
+        if m:
+            if current:
+                result[current] = {"state": result[current]["state"], "detail": "\n".join(detail_lines)}
+            current = m.group(1)
+            state = m.group(2)  # ESTABLISHED / CONNECTING / REKEYING / DELETING
+            result[current] = {"state": state, "detail": ""}
+            detail_lines = [line]
+        elif current:
+            detail_lines.append(line)
+    if current:
+        result[current] = {"state": result[current]["state"], "detail": "\n".join(detail_lines)}
+    return JSONResponse(result)
+
+@app.get("/api/status")
+async def api_status():
+    return JSONResponse(ctl.status())
+
+@app.get("/api/logs")
+async def api_logs():
+    return JSONResponse({"logs": ctl.get_logs()})
+
+@app.get("/api/myip")
+async def api_myip():
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://myip.ipip.net", timeout=5) as r:
+            text = r.read().decode()
+        # 返回格式: "当前 IP：1.2.3.4  来自于：..."
+        import re
+        m = re.search(r'(\d+\.\d+\.\d+\.\d+)', text)
+        ip = m.group(1) if m else ""
+        return JSONResponse({"ip": ip, "raw": text.strip()})
+    except Exception as e:
+        return JSONResponse({"ip": "", "error": str(e)}, status_code=502)
+
+@app.get("/api/gen-psk")
+async def api_gen_psk():
+    import secrets
+    return JSONResponse({"psk": secrets.token_urlsafe(32)})
+
+@app.post("/certs/generate")
+async def cert_generate(cn: str = Form(...), days: int = Form(3650)):
+    """生成自签名 CA + 本端证书 + 私钥"""
+    code, out, err = ctl.generate_cert(cn, days)
+    if code != 0:
+        return redirect("/certs", err or "生成失败", False)
+    return redirect("/certs", f"证书 {cn} 生成成功")

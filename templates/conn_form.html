@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ '编辑' if edit else '新建' }}连接 — StrongSwan Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+
+{% if err %}
+<div class="flash flash-err">✗ {{ err }}</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-title">
+    {{ '编辑连接：' + conn.name if edit else ('新建 Route-Based 连接' if vpn_type == 'route' else '新建 Policy-Based 连接') }}
+    {% if not edit %}<a href="/connections/new" style="font-size:12px;font-weight:400;margin-left:12px;color:var(--muted)">← 重新选择类型</a>{% endif %}
+  </div>
+
+  <form method="post" action="{{ '/connections/' + conn.name + '/edit' if edit else '/connections/new' }}">
+    <input type="hidden" name="vpn_type" value="{{ vpn_type }}">
+    <div class="form-grid">
+    {% for key, label, ftype, placeholder, hint in fields %}
+      <div class="field">
+        <label>{{ label }}{% if key == 'name' %} *{% endif %}</label>
+        {% if key == 'name' and edit %}
+          <input type="text" value="{{ conn.name }}" disabled style="opacity:.5">
+        {% elif ftype == 'select' %}
+          <select name="{{ key }}">
+            {% for opt in select_options[key] %}
+            <option value="{{ opt }}" {{ 'selected' if conn.get(key, placeholder) == opt else '' }}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+        {% elif ftype == 'datalist' %}
+          <input type="text" name="{{ key }}" list="dl-{{ key }}"
+            value="{{ conn.get(key, placeholder) }}" placeholder="{{ placeholder }}">
+          <datalist id="dl-{{ key }}">
+            <option value="0.0.0.0/0">
+            <option value="::/0">
+            <option value="192.168.1.0/24">
+            <option value="10.0.0.0/8">
+            <option value="172.16.0.0/12">
+          </datalist>
+        {% elif key == 'local_addr' %}
+          <div style="display:flex;gap:6px">
+            <input type="text" name="{{ key }}" id="field-local-addr"
+              value="{{ conn.get(key, '') }}" placeholder="{{ placeholder }}" style="flex:1">
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-get-ip" onclick="fetchMyIp()">获取公网IP</button>
+          </div>
+        {% elif key == 'psk' %}
+          <div style="display:flex;gap:6px">
+            <input type="text" name="{{ key }}" id="field-psk"
+              value="{{ conn.get(key, '') }}" placeholder="{{ placeholder }}" style="flex:1">
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-gen-psk">生成</button>
+          </div>
+        {% elif key == 'local_cert' %}
+          <select name="{{ key }}">
+            <option value="">— 不使用 —</option>
+            {% for f in local_certs %}
+            <option value="{{ f }}" {{ 'selected' if conn.get(key) == f else '' }}>{{ f }}</option>
+            {% endfor %}
+          </select>
+          {% if not local_certs %}<span class="hint"><a href="/certs">还没有证书，去生成 →</a></span>{% endif %}
+        {% elif key == 'remote_cert' %}
+          <select name="{{ key }}">
+            <option value="">— 不使用 —</option>
+            {% for f in ca_certs %}
+            <option value="{{ f }}" {{ 'selected' if conn.get(key) == f else '' }}>{{ f }}</option>
+            {% endfor %}
+          </select>
+          {% if not ca_certs %}<span class="hint"><a href="/certs">还没有 CA 证书，去生成 →</a></span>{% endif %}
+        {% else %}
+          <input type="{{ ftype }}" name="{{ key }}"
+            value="{{ conn.get(key, '') if ftype != 'password' else '' }}"
+            placeholder="{{ placeholder }}">
+        {% endif %}
+        <span class="hint">{{ hint }}</span>
+      </div>
+    {% endfor %}
+    </div>
+
+    <!-- 高级选项 -->
+    <details style="margin-top:16px">
+      <summary style="cursor:pointer;color:var(--muted);font-size:13px;user-select:none">▶ 高级选项</summary>
+      <div class="form-grid" style="margin-top:12px">
+      {% for key, label, ftype, placeholder, hint in adv_fields %}
+        <div class="field">
+          <label>{{ label }}</label>
+          {% if ftype == 'select' %}
+            <select name="{{ key }}">
+              {% for opt in select_options[key] %}
+              <option value="{{ opt }}" {{ 'selected' if conn.get(key, placeholder) == opt else '' }}>{{ opt }}</option>
+              {% endfor %}
+            </select>
+          {% else %}
+            <input type="{{ ftype }}" name="{{ key }}"
+              value="{{ conn.get(key, '') }}" placeholder="{{ placeholder }}">
+          {% endif %}
+          <span class="hint">{{ hint }}</span>
+        </div>
+      {% endfor %}
+      </div>
+    </details>
+
+    <div style="margin-top:24px;display:flex;gap:10px">
+      <button type="submit" class="btn btn-primary">💾 保存并写入配置</button>
+      <a href="/" class="btn btn-ghost">取消</a>
+    </div>
+  </form>
+</div>
+
+<!-- Quick reference -->
+<div class="card" style="font-size:12px;color:var(--muted)">
+  <div class="card-title" style="font-size:13px">常用加密提案参考</div>
+  <table>
+    <tr><th>场景</th><th>IKE 提案</th><th>ESP 提案</th></tr>
+    <tr><td>高安全（推荐）</td><td>aes256gcm16-prfsha384-ecp384</td><td>aes256gcm16-ecp384</td></tr>
+    <tr><td>通用兼容</td><td>aes256-sha256-modp2048</td><td>aes256-sha256</td></tr>
+    <tr><td>兼容旧设备</td><td>aes128-sha1-modp1024</td><td>aes128-sha1</td></tr>
+    <tr><td>Windows 内置</td><td>aes256-sha256-modp1024</td><td>aes256-sha256</td></tr>
+  </table>
+</div>
+
+</div>
+<script src="/static/app.js"></script>
+<script>
+async function fetchMyIp() {
+  const btn = document.getElementById('btn-get-ip');
+  const input = document.getElementById('field-local-addr');
+  btn.textContent = '获取中…'; btn.disabled = true;
+  try {
+    const res = await fetch('/api/myip');
+    const data = await res.json();
+    if (data.ip) { input.value = data.ip; btn.textContent = '✓ 已填充'; }
+    else { btn.textContent = '获取失败'; }
+  } catch { btn.textContent = '获取失败'; }
+  setTimeout(() => { btn.textContent = '获取公网IP'; btn.disabled = false; }, 2000);
+}
+
+// 新建时自动获取
+const addrInput = document.getElementById('field-local-addr');
+if (addrInput && !addrInput.value) fetchMyIp();
+</script>

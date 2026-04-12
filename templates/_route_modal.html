@@ -1,0 +1,50 @@
+<!-- Route Modal — 可在任意页面 include，需引入 style.css -->
+<div id="route-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;align-items:center;justify-content:center">
+  <div style="background:#1e1e2e;border-radius:8px;padding:24px;width:min(420px,95vw);display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong style="color:#cdd6f4" id="route-modal-title">添加静态路由</strong>
+      <span style="cursor:pointer;color:#6c7086;font-size:20px" onclick="closeRouteModal()">✕</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <label style="font-size:12px;color:var(--muted)">目标网段 <span style="color:#f38ba8">*</span></label>
+      <input id="rm-dst" class="input" placeholder="10.0.0.0/24" required>
+      <label style="font-size:12px;color:var(--muted)">下一跳 via <span style="color:var(--muted)">(可选)</span></label>
+      <input id="rm-via" class="input" placeholder="192.168.1.1">
+      <label style="font-size:12px;color:var(--muted)">出口网卡 dev <span style="color:var(--muted)">(可选)</span></label>
+      <input id="rm-dev" class="input" placeholder="eth0">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-ghost btn-sm" onclick="closeRouteModal()">取消</button>
+      <button class="btn btn-success btn-sm" onclick="submitRoute()">＋ 添加路由</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function openRouteModal(dst='', via='', dev='') {
+  document.getElementById('rm-dst').value = dst;
+  document.getElementById('rm-via').value = via;
+  document.getElementById('rm-dev').value = dev;
+  document.getElementById('route-modal').style.display = 'flex';
+  document.getElementById('rm-dst').focus();
+}
+function closeRouteModal() {
+  document.getElementById('route-modal').style.display = 'none';
+}
+async function submitRoute() {
+  const dst = document.getElementById('rm-dst').value.trim();
+  if (!dst) { alert('目标网段不能为空'); return; }
+  const fd = new FormData();
+  fd.append('dst', dst);
+  fd.append('via', document.getElementById('rm-via').value.trim());
+  fd.append('dev', document.getElementById('rm-dev').value.trim());
+  await fetch('/system/route/add', {method:'POST', body: fd, redirect: 'manual'});
+  closeRouteModal();
+  if (typeof loadRoutes === 'function') loadRoutes();
+  else location.reload();
+}
+// 关闭遮罩点击
+document.getElementById('route-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('route-modal')) closeRouteModal();
+});
+</script>

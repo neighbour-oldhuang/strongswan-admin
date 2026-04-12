@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StrongSwan Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+
+{% if ok %}
+<div class="flash flash-ok">✓ {{ ok }}</div>
+{% endif %}
+{% if err %}
+<div class="flash flash-err">✗ {{ err }}</div>
+{% endif %}
+
+<!-- Instance Control -->
+<div class="card">
+  <div class="card-title">StrongSwan 实例</div>
+  <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div>
+      服务状态：
+      <span id="svc-status" class="badge {{ 'badge-green' if status.active else 'badge-red' }}">
+        {{ '运行中' if status.active else '已停止' }}
+      </span>
+    </div>
+    {% if not installed %}
+    <span class="badge badge-gray">未检测到 strongSwan</span>
+    <button class="btn btn-primary btn-sm" onclick="startInstall()">⬇ 一键安装</button>
+    {% else %}
+    <div class="actions">
+      <form method="post" action="/instance/start">
+        <button class="btn btn-success btn-sm">▶ 启动</button>
+      </form>
+      <form method="post" action="/instance/stop">
+        <button class="btn btn-danger btn-sm" data-confirm="确认停止 strongSwan？">■ 停止</button>
+      </form>
+      <form method="post" action="/instance/restart">
+        <button class="btn btn-warn btn-sm">↺ 重启</button>
+      </form>
+      <form method="post" action="/instance/reload">
+        <button class="btn btn-ghost btn-sm">⟳ 重载配置</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Connections -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <span class="card-title" style="margin:0">IPSec 连接</span>
+    <a href="/connections/new" class="btn btn-primary btn-sm">+ 新建连接</a>
+  </div>
+  {% if data.connections %}
+  <table id="conn-table">
+    <thead><tr>
+      <th>名称</th><th>对端地址</th><th>认证</th><th>IKE版本</th><th>启动动作</th><th>状态</th><th>操作</th>
+    </tr></thead>
+    <tbody>
+    {% for name, c in data.connections.items() %}
+    <tr data-name="{{ name }}" onclick="selectConn('{{ name }}')" style="cursor:pointer">
+      <td><strong>{{ name }}</strong></td>
+      <td>{{ c.remote_addr or '—' }}</td>
+      <td>{{ c.auth_local or 'psk' }}</td>
+      <td>IKEv{{ c.ike_version or 2 }}</td>
+      <td>{{ c.start_action or 'none' }}</td>
+      <td><span class="badge badge-gray" id="sa-{{ name }}">—</span></td>
+      <td>
+        <div class="actions">
+          <a href="/connections/{{ name }}/edit" class="btn btn-ghost btn-sm">编辑</a>
+          {% if c.get('use_xfrm') %}<button class="btn btn-ghost btn-sm" onclick="openRouteModal('{{ c.remote_ts or '' }}','','')">＋路由</button>{% endif %}
+          <form method="post" action="/connections/{{ name }}/up" style="display:inline">
+            <button class="btn btn-success btn-sm">↑ 连接</button>
+          </form>
+          <form method="post" action="/connections/{{ name }}/down" style="display:inline">
+            <button class="btn btn-warn btn-sm">↓ 断开</button>
+          </form>
+          <form method="post" action="/connections/{{ name }}/delete" style="display:inline">
+            <button class="btn btn-danger btn-sm" data-confirm="确认删除连接 {{ name }}？">删除</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <!-- SA 详情面板已合并到下方 SA 状态卡片 -->
+  {% else %}
+  <p style="color:var(--muted);text-align:center;padding:24px 0">暂无连接，<a href="/connections/new">新建一个</a></p>
+  {% endif %}
+</div>
+
+<!-- SA Status + Logs -->
+<div class="grid2">
+  <div class="card">
+    <div class="card-title">SA 状态 <span id="sa-detail-label" style="font-size:11px;color:var(--muted)"></span></div>
+    <div class="logbox" id="sa-status-box" style="max-height:200px">{{ status.raw or '(无数据)' }}</div>
+  </div>
+  <div class="card">
+    <div class="card-title">系统日志 <span style="font-size:11px;color:var(--muted)">(自动刷新)</span></div>
+    <div class="logbox" id="logbox">加载中…</div>
+  </div>
+</div>
+
+{% include '_route_modal.html' %}
+
+<!-- Install Modal -->
+<div id="install-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;align-items:center;justify-content:center">
+  <div style="background:#1e1e2e;border-radius:8px;padding:24px;width:min(680px,95vw);display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong style="color:#cdd6f4">安装 strongSwan</strong>
+      <span id="install-close" style="cursor:pointer;color:#6c7086;font-size:20px" onclick="closeInstall()">✕</span>
+    </div>
+    <pre id="install-log" style="background:#11111b;color:#a6e3a1;padding:12px;border-radius:6px;height:320px;overflow-y:auto;font-size:12px;margin:0;white-space:pre-wrap"></pre>
+    <button id="install-reload" class="btn btn-primary btn-sm" style="display:none;align-self:flex-end" onclick="location.reload()">✓ 完成，刷新页面</button>
+  </div>
+</div>
+
+<script>
+function startInstall() {
+  const modal = document.getElementById('install-modal');
+  const log   = document.getElementById('install-log');
+  const btn   = document.getElementById('install-reload');
+  modal.style.display = 'flex';
+  log.textContent = '';
+  btn.style.display = 'none';
+  document.getElementById('install-close').style.pointerEvents = 'none';
+
+  const es = new EventSource('/instance/install');
+  es.onmessage = e => {
+    if (e.data === '__DONE__') {
+      es.close();
+      btn.style.display = 'inline-block';
+      document.getElementById('install-close').style.pointerEvents = '';
+      return;
+    }
+    log.textContent += e.data;
+    log.scrollTop = log.scrollHeight;
+  };
+  es.onerror = () => { es.close(); document.getElementById('install-close').style.pointerEvents = ''; };
+}
+function closeInstall() {
+  document.getElementById('install-modal').style.display = 'none';
+}
+
+// sysctl table - moved to /system page
+
+loadSaStatus();
+setInterval(loadSaStatus, 5000);
+const SA_STATE_MAP = {
+  'ESTABLISHED': ['badge-green', '已连接'],
+  'CONNECTING':  ['badge-warn',  '连接中'],
+  'REKEYING':    ['badge-green', '重协商'],
+  'DELETING':    ['badge-red',   '断开中'],
+};
+let saData = {};
+async function loadSaStatus() {
+  const res = await fetch('/api/sa-status');
+  saData = await res.json();
+  document.querySelectorAll('#conn-table tbody tr').forEach(tr => {
+    const name = tr.dataset.name;
+    const badge = document.getElementById('sa-' + name);
+    if (!badge) return;
+    const info = saData[name];
+    if (info) {
+      const [cls, label] = SA_STATE_MAP[info.state] || ['badge-gray', info.state];
+      badge.className = 'badge ' + cls;
+      badge.textContent = label;
+    } else {
+      badge.className = 'badge badge-gray';
+      badge.textContent = '未连接';
+    }
+  });
+  // 刷新已选中行的详情
+  const active = document.querySelector('#conn-table tbody tr.row-active');
+  if (active) updateDetail(active.dataset.name);
+}
+
+function updateDetail(name) {
+  const box = document.getElementById('sa-status-box');
+  const label = document.getElementById('sa-detail-label');
+  const info = saData[name];
+  label.textContent = '— ' + name;
+  box.textContent = info ? info.detail : '暂无 SA 数据';
+}
+
+function selectConn(name) {
+  document.querySelectorAll('#conn-table tbody tr').forEach(tr => tr.classList.remove('row-active'));
+  const tr = document.querySelector(`#conn-table tbody tr[data-name="${name}"]`);
+  if (tr) tr.classList.add('row-active');
+  updateDetail(name);
+}
+
+loadSaStatus();
+setInterval(loadSaStatus, 5000);
+
+async function refreshLogs() {
+  try {
+    const r = await fetch('/api/logs');
+    const d = await r.json();
+    const el = document.getElementById('logbox');
+    if (el) { el.textContent = d.logs; el.scrollTop = el.scrollHeight; }
+  } catch {}
+}
+async function refreshStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const el = document.getElementById('svc-status');
+    if (el) {
+      el.className = 'badge ' + (d.active ? 'badge-green' : 'badge-red');
+      el.textContent = d.active ? '运行中' : '已停止';
+    }
+  } catch {}
+}
+refreshLogs(); setInterval(refreshLogs, 10000);
+refreshStatus(); setInterval(refreshStatus, 8000);
+</script>
+</body>
+</html>
