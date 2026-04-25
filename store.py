@@ -1,4 +1,4 @@
-import json, os
+import json, os, copy
 from pathlib import Path
 
 DATA_FILE = Path("data/config.json")
@@ -11,7 +11,7 @@ DEFAULT = {
 def load():
     if DATA_FILE.exists():
         return json.loads(DATA_FILE.read_text())
-    return dict(DEFAULT)
+    return copy.deepcopy(DEFAULT)
 
 def save(data: dict):
     DATA_FILE.parent.mkdir(exist_ok=True)

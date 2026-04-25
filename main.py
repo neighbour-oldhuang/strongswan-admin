@@ -3,17 +3,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
-import store, ctl, shutil, os
+import store, ctl, shutil, os, re
 
 app = FastAPI(title="StrongSwan Admin")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-
-def flash(request: Request, msg: str, ok=True):
-    # store in query param for simplicity (no session dep)
-    pass
 
 def redirect(path, msg="", ok=True):
     sep = "?" if "?" not in path else "&"
@@ -295,11 +291,17 @@ async def cert_upload(cert_type: str = Form(...), file: UploadFile = File(...)):
     d = dirs.get(cert_type)
     if not d:
         return redirect("/certs", "未知类型", False)
-    os.makedirs(d, exist_ok=True)
-    dest = Path(d) / file.filename
+    filename = Path(file.filename).name  # 防路径穿越
+    if not re.fullmatch(r'[A-Za-z0-9._-]+', filename):
+        return redirect("/certs", "文件名含非法字符", False)
+    if Path(filename).suffix.lower() not in {".pem", ".crt", ".cer", ".key"}:
+        return redirect("/certs", "仅允许 .pem/.crt/.cer/.key 文件", False)
     content = await file.read()
-    dest.write_bytes(content)
-    return redirect("/certs", f"{file.filename} 上传成功")
+    if len(content) > 1 * 1024 * 1024:  # 1 MB 上限
+        return redirect("/certs", "文件过大（上限 1MB）", False)
+    os.makedirs(d, exist_ok=True)
+    (Path(d) / filename).write_bytes(content)
+    return redirect("/certs", f"{filename} 上传成功")
 
 @app.post("/certs/delete")
 async def cert_delete(cert_type: str = Form(...), filename: str = Form(...)):
@@ -321,7 +323,6 @@ async def api_sa_status():
     detail_lines = []
     for line in out.splitlines():
         # 新连接块开始：以连接名开头，如 "myipsec: #1, ESTABLISHED ..."
-        import re
         m = re.match(r'^(\S+?):\s+#\d+,\s+(\w+)', line)
         if m:
             if current:
@@ -348,13 +349,10 @@ async def api_logs():
 async def api_myip():
     import urllib.request
     try:
-        with urllib.request.urlopen("http://myip.ipip.net", timeout=5) as r:
-            text = r.read().decode()
-        # 返回格式: "当前 IP：1.2.3.4  来自于：..."
-        import re
-        m = re.search(r'(\d+\.\d+\.\d+\.\d+)', text)
-        ip = m.group(1) if m else ""
-        return JSONResponse({"ip": ip, "raw": text.strip()})
+        with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5) as r:
+            import json as _json
+            data = _json.loads(r.read().decode())
+        return JSONResponse({"ip": data.get("ip", ""), "raw": data.get("ip", "")})
     except Exception as e:
         return JSONResponse({"ip": "", "error": str(e)}, status_code=502)
 

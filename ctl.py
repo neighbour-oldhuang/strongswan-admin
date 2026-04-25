@@ -1,4 +1,4 @@
-import subprocess, shutil
+import subprocess, shutil, re
 
 def run(cmd: str, input_text: str = None, timeout: int = 15) -> tuple[int, str, str]:
     r = subprocess.run(
@@ -33,6 +33,8 @@ def get_logs(lines=80) -> str:
 def generate_cert(cn: str, days: int = 3650) -> tuple:
     """生成自签名 CA、本端证书和私钥，写入 swanctl 标准目录"""
     import os
+    if not re.fullmatch(r'[A-Za-z0-9._-]+', cn):
+        return 1, "", "CN 只允许字母、数字、点、连字符和下划线"
     os.makedirs("/etc/swanctl/x509ca", exist_ok=True)
     os.makedirs("/etc/swanctl/x509", exist_ok=True)
     os.makedirs("/etc/swanctl/private", exist_ok=True)
@@ -90,17 +92,18 @@ def get_routes() -> str:
     _, out, _ = run("ip route show")
     return out
 
+def _route_cmd(action: str, dst: str, via: str, dev: str) -> tuple:
+    cmd = ["ip", "route", action, dst]
+    if via: cmd += ["via", via]
+    if dev: cmd += ["dev", dev]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
 def add_route(dst: str, via: str, dev: str) -> tuple:
-    parts = f"{dst}"
-    if via:  parts += f" via {via}"
-    if dev:  parts += f" dev {dev}"
-    return run(f"ip route add {parts}")
+    return _route_cmd("add", dst, via, dev)
 
 def del_route(dst: str, via: str, dev: str) -> tuple:
-    parts = f"{dst}"
-    if via:  parts += f" via {via}"
-    if dev:  parts += f" dev {dev}"
-    return run(f"ip route del {parts}")
+    return _route_cmd("del", dst, via, dev)
 
 def install():
     """通过 apt-get 安装 strongswan，以生成器方式 yield 进度行"""

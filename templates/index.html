@@ -174,7 +174,6 @@ async function loadSaStatus() {
       badge.textContent = '未连接';
     }
   });
-  // 刷新已选中行的详情
   const active = document.querySelector('#conn-table tbody tr.row-active');
   if (active) updateDetail(active.dataset.name);
 }
@@ -193,9 +192,6 @@ function selectConn(name) {
   if (tr) tr.classList.add('row-active');
   updateDetail(name);
 }
-
-loadSaStatus();
-setInterval(loadSaStatus, 5000);
 
 async function refreshLogs() {
   try {
