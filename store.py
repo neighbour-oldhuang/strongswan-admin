@@ -2,6 +2,7 @@ import json, os, copy
 from pathlib import Path
 
 DATA_FILE = Path("data/config.json")
+RELOAD_FLAG = Path("data/.needs_reload")
 
 DEFAULT = {
     "instance": {"installed": False, "auto_start": False},
@@ -16,3 +17,10 @@ def load():
 def save(data: dict):
     DATA_FILE.parent.mkdir(exist_ok=True)
     DATA_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    RELOAD_FLAG.touch()
+
+def needs_reload() -> bool:
+    return RELOAD_FLAG.exists()
+
+def clear_reload_flag():
+    RELOAD_FLAG.unlink(missing_ok=True)

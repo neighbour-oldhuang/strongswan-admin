@@ -40,6 +40,7 @@ a:hover { text-decoration: underline; }
 .flash { padding: 10px 16px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
 .flash-ok  { background: #064e3b; color: var(--accent2); border: 1px solid #065f46; }
 .flash-err { background: #450a0a; color: var(--danger); border: 1px solid #7f1d1d; }
+.flash-warn { background: #451a03; color: #fdba74; border: 1px solid #92400e; display:flex; align-items:center; gap:12px; }
 
 /* table */
 table { width: 100%; border-collapse: collapse; }

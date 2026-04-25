@@ -137,11 +137,11 @@ def write_swanctl(connections: dict):
 
     for idx, (name, c) in enumerate(connections.items(), start=1):
         if_id = idx
-        auth_local = c.get("auth_local", "pubkey")
-        auth_remote = c.get("auth_remote", "pubkey")
+        auth_local = c.get("auth_local") or "pubkey"
+        auth_remote = c.get("auth_remote") or "pubkey"
 
         conn_block.append(f"    {name} {{")
-        conn_block.append(f"        version = {c.get('ike_version', 2)}")
+        conn_block.append(f"        version = {c.get('ike_version') or 2}")
         if c.get("local_addr"):  conn_block.append(f"        local_addrs = {c['local_addr']}")
         if c.get("remote_addr"): conn_block.append(f"        remote_addrs = {c['remote_addr']}")
         if c.get("proposals"):   conn_block.append(f"        proposals = {c['proposals']}")

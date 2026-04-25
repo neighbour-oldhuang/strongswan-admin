@@ -28,6 +28,7 @@ async def index(request: Request):
         "status": st, "installed": installed,
         "ok": request.query_params.get("ok"),
         "err": request.query_params.get("err"),
+        "needs_reload": store.needs_reload(),
     })
 
 # ── system config (sysctl + routes) ──────────────────────────────────────────
@@ -96,6 +97,8 @@ async def inst_restart():
 @app.post("/instance/reload")
 async def inst_reload():
     code, out, err = ctl.reload()
+    if code == 0:
+        store.clear_reload_flag()
     return redirect("/", out or err or "done", code == 0)
 
 # ── connections ───────────────────────────────────────────────────────────────
@@ -312,6 +315,43 @@ async def cert_delete(cert_type: str = Form(...), filename: str = Form(...)):
         if p.exists(): p.unlink()
     return redirect("/certs", f"{filename} 已删除")
 
+# ── config import / export ────────────────────────────────────────────────────
+
+@app.get("/connections/{name}/export")
+async def conn_export(name: str):
+    import json as _json
+    data = store.load()
+    conn = data["connections"].get(name)
+    if not conn:
+        return redirect("/", "连接不存在", False)
+    content = _json.dumps({name: conn}, indent=2, ensure_ascii=False)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={name}.json"},
+    )
+
+@app.post("/config/import")
+async def config_import(file: UploadFile = File(...)):
+    import json as _json
+    try:
+        content = await file.read()
+        incoming = _json.loads(content)
+        # 支持单连接格式 {name: {...}} 或全量格式 {connections: {...}}
+        if "connections" in incoming:
+            conns = incoming["connections"]
+        else:
+            conns = incoming
+        if not isinstance(conns, dict):
+            return JSONResponse({"ok": False, "msg": "格式错误"})
+        data = store.load()
+        data["connections"].update(conns)
+        store.save(data)
+        ctl.write_swanctl(data["connections"])
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": str(e)})
+
 # ── status / logs API ─────────────────────────────────────────────────────────
 
 @app.get("/api/sa-status")
@@ -348,13 +388,16 @@ async def api_logs():
 @app.get("/api/myip")
 async def api_myip():
     import urllib.request
-    try:
-        with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5) as r:
-            import json as _json
-            data = _json.loads(r.read().decode())
-        return JSONResponse({"ip": data.get("ip", ""), "raw": data.get("ip", "")})
-    except Exception as e:
-        return JSONResponse({"ip": "", "error": str(e)}, status_code=502)
+    last_err = ""
+    for url in ["https://ifconfig.me", "https://ip.sb"]:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/7.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                ip = r.read().decode().strip()
+            return JSONResponse({"ip": ip, "raw": ip})
+        except Exception as e:
+            last_err = str(e)
+    return JSONResponse({"ip": "", "error": last_err}, status_code=502)
 
 @app.get("/api/gen-psk")
 async def api_gen_psk():

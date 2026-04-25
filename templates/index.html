@@ -15,6 +15,13 @@
 {% if err %}
 <div class="flash flash-err">✗ {{ err }}</div>
 {% endif %}
+{% if needs_reload %}
+<div class="flash flash-warn">⚠ 配置已变更，需要重载后生效 —
+  <form method="post" action="/instance/reload" style="display:inline">
+    <button class="btn btn-warn btn-sm">⟳ 立即重载</button>
+  </form>
+</div>
+{% endif %}
 
 <!-- Instance Control -->
 <div class="card">
@@ -52,17 +59,23 @@
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
     <span class="card-title" style="margin:0">IPSec 连接</span>
-    <a href="/connections/new" class="btn btn-primary btn-sm">+ 新建连接</a>
+    <div class="actions">
+      <label class="btn btn-ghost btn-sm" style="cursor:pointer">⬆ 导入连接
+        <input type="file" accept=".json" style="display:none" onchange="importConn(this)">
+      </label>
+      <a href="/connections/new" class="btn btn-primary btn-sm">+ 新建连接</a>
+    </div>
   </div>
   {% if data.connections %}
   <table id="conn-table">
     <thead><tr>
-      <th>名称</th><th>对端地址</th><th>认证</th><th>IKE版本</th><th>启动动作</th><th>状态</th><th>操作</th>
+      <th>名称</th><th>类型</th><th>对端地址</th><th>认证</th><th>IKE版本</th><th>启动动作</th><th>状态</th><th>操作</th>
     </tr></thead>
     <tbody>
     {% for name, c in data.connections.items() %}
     <tr data-name="{{ name }}" onclick="selectConn('{{ name }}')" style="cursor:pointer">
       <td><strong>{{ name }}</strong></td>
+      <td><span class="badge {{ 'badge-gray' if c.get('use_xfrm') else 'badge-green' }}" style="font-size:11px">{{ 'Route' if c.get('use_xfrm') else 'Policy' }}</span></td>
       <td>{{ c.remote_addr or '—' }}</td>
       <td>{{ c.auth_local or 'psk' }}</td>
       <td>IKEv{{ c.ike_version or 2 }}</td>
@@ -71,6 +84,7 @@
       <td>
         <div class="actions">
           <a href="/connections/{{ name }}/edit" class="btn btn-ghost btn-sm">编辑</a>
+          <a href="/connections/{{ name }}/export" class="btn btn-ghost btn-sm">⬇ 导出</a>
           {% if c.get('use_xfrm') %}<button class="btn btn-ghost btn-sm" onclick="openRouteModal('{{ c.remote_ts or '' }}','','')">＋路由</button>{% endif %}
           <form method="post" action="/connections/{{ name }}/up" style="display:inline">
             <button class="btn btn-success btn-sm">↑ 连接</button>
@@ -147,6 +161,18 @@ function closeInstall() {
 }
 
 // sysctl table - moved to /system page
+
+async function importConn(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const text = await file.text();
+  const fd = new FormData();
+  fd.append('file', new Blob([text], {type: 'application/json'}), file.name);
+  const r = await fetch('/config/import', {method: 'POST', body: fd});
+  const d = await r.json();
+  if (d.ok) location.reload();
+  else alert('导入失败: ' + d.msg);
+}
 
 loadSaStatus();
 setInterval(loadSaStatus, 5000);
