@@ -129,8 +129,8 @@ _ADVANCED_FIELDS = [
 
 # policy-based 独有字段
 POLICY_FIELDS = _COMMON_FIELDS + [
-    ("local_ts",  "本端子网", "datalist", "0.0.0.0/0", "本端允许通过 VPN 的流量范围"),
-    ("remote_ts", "对端子网", "datalist", "0.0.0.0/0", "对端允许通过 VPN 的流量范围"),
+    ("local_ts",  "本端子网", "datalist", "0.0.0.0/0", "本端允许通过 VPN 的流量范围，多个网段用逗号分隔，如 192.168.8.0/24,192.168.9.0/24"),
+    ("remote_ts", "对端子网", "datalist", "0.0.0.0/0", "对端允许通过 VPN 的流量范围，多个网段用逗号分隔"),
     ("mode",      "隧道模式", "select", "tunnel",   "tunnel=隧道模式（常用）；transport=传输模式"),
 ]
 
