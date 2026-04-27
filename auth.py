@@ -9,17 +9,17 @@ os.environ.setdefault("AUTHLIB_INSECURE_TRANSPORT", "1")
 import store
 from authlib.integrations.starlette_client import OAuth
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, HTMLResponse
 
 PUBLIC_PATHS = ("/auth/", "/static/")
 
 oauth = OAuth()
-_oidc_registered_issuer = None  # 跟踪当前注册的 issuer，配置变更时重新注册
+_oidc_registered_issuer = None
 
 
 def _cfg() -> dict:
-    """合并 store 和环境变量，store 优先"""
     saved = store.load().get("oidc", {})
     return {
         "enabled":        saved.get("enabled", os.environ.get("OIDC_ENABLED", "0")) not in ("0", "", False),
@@ -32,7 +32,6 @@ def _cfg() -> dict:
 
 
 def get_cfg() -> dict:
-    """供 API 读取，隐藏 secret"""
     c = _cfg()
     if c["client_secret"]:
         c["client_secret_set"] = True
@@ -43,21 +42,17 @@ def get_cfg() -> dict:
 
 
 def save_cfg(data: dict):
-    """保存 OIDC 配置到 store"""
     all_data = store.load()
     old = all_data.get("oidc", {})
-    # 如果 secret 是掩码则保留旧值
     if data.get("client_secret", "").startswith("••"):
         data["client_secret"] = old.get("client_secret", "")
     all_data["oidc"] = data
     store.save(all_data)
-    # 重置注册状态，下次请求时重新注册
     global _oidc_registered_issuer
     _oidc_registered_issuer = None
 
 
 def _ensure_registered():
-    """按需注册/重新注册 OIDC provider"""
     global _oidc_registered_issuer
     c = _cfg()
     issuer = c.get("issuer", "")
@@ -65,7 +60,6 @@ def _ensure_registered():
         return False
     if _oidc_registered_issuer == issuer:
         return True
-    # authlib 允许重复 register 同名 provider，后者覆盖前者
     oauth.register(
         name="oidc",
         client_id=c["client_id"],
@@ -78,12 +72,40 @@ def _ensure_registered():
     return True
 
 
+class AuthGuardMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path.startswith(p) for p in PUBLIC_PATHS):
+            return await call_next(request)
+
+        c = _cfg()
+        if not c["enabled"]:
+            return await call_next(request)
+
+        user = request.session.get("user")
+        if not user:
+            return RedirectResponse("/auth/login")
+
+        groups = request.session.get("groups", [])
+        required = c["required_group"]
+        if required and required not in groups:
+            return HTMLResponse(
+                "<h2>403 Forbidden</h2>"
+                f"<p>用户 <b>{user}</b> 不在 <code>{required}</code> 组中，无权访问。</p>"
+                '<p><a href="/auth/logout">切换账号</a></p>',
+                status_code=403,
+            )
+        return await call_next(request)
+
+
 def setup(app):
     """注册 session 中间件、认证路由和全局守卫"""
     secret_key = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
+    # 注册顺序：后 add 的在外层先执行
+    # AuthGuard 先 add → 内层；Session 后 add → 外层
+    # 请求流: Session → AuthGuard → 路由
+    app.add_middleware(AuthGuardMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=secret_key, max_age=86400)
-
-    # ── 路由 ──────────────────────────────────────────────────────────────
 
     @app.get("/auth/login")
     async def login(request: Request):
@@ -110,30 +132,3 @@ def setup(app):
     async def logout(request: Request):
         request.session.clear()
         return RedirectResponse("/auth/login")
-
-    # ── 全局守卫 ──────────────────────────────────────────────────────────
-
-    @app.middleware("http")
-    async def auth_guard(request: Request, call_next):
-        path = request.url.path
-        if any(path.startswith(p) for p in PUBLIC_PATHS):
-            return await call_next(request)
-
-        c = _cfg()
-        if not c["enabled"]:
-            return await call_next(request)
-
-        user = request.session.get("user")
-        if not user:
-            return RedirectResponse("/auth/login")
-
-        groups = request.session.get("groups", [])
-        required = c["required_group"]
-        if required and required not in groups:
-            return HTMLResponse(
-                "<h2>403 Forbidden</h2>"
-                f"<p>用户 <b>{user}</b> 不在 <code>{required}</code> 组中，无权访问。</p>"
-                '<p><a href="/auth/logout">切换账号</a></p>',
-                status_code=403,
-            )
-        return await call_next(request)
