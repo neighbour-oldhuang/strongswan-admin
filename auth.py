@@ -5,6 +5,7 @@
 需要 IdP 在 id_token 或 userinfo 中返回 groups claim。
 """
 import os, secrets
+os.environ.setdefault("AUTHLIB_INSECURE_TRANSPORT", "1")
 import store
 from authlib.integrations.starlette_client import OAuth
 from starlette.middleware.sessions import SessionMiddleware
