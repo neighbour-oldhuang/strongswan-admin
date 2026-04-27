@@ -1,9 +1,10 @@
-"""nftables SNAT 网关管理"""
+"""nftables SNAT / DNAT 网关管理"""
 import subprocess, re
 from pathlib import Path
 
 TABLE_NAME = "strongswan_admin_nat"
-CHAIN_NAME = "postrouting_snat"
+CHAIN_SNAT = "postrouting_snat"
+CHAIN_DNAT = "prerouting_dnat"
 NFTCONF = "/etc/nftables.d/strongswan-admin-snat.conf"
 
 
@@ -35,16 +36,78 @@ def check_env() -> dict:
 
 # ── nftables 规则生成与应用 ────────────────────────────────────────────────────
 
-def _build_ruleset(subnets: list[str], out_iface: str, proxy_ipsec: bool = False) -> str:
-    lines = [
-        f"table ip {TABLE_NAME} {{",
-        f"    chain {CHAIN_NAME} {{",
-        f"        type nat hook postrouting priority srcnat; policy accept;",
-    ]
+def get_listening_ports() -> dict[str, set[int]]:
+    """返回本机已监听的端口 {"tcp": {22, 80, ...}, "udp": {53, ...}}"""
+    result = {"tcp": set(), "udp": set()}
+    _, out, _ = run("ss -tlnH 2>/dev/null")
+    for line in out.splitlines():
+        m = re.search(r":(\d+)\s", line)
+        if m:
+            result["tcp"].add(int(m.group(1)))
+    _, out, _ = run("ss -ulnH 2>/dev/null")
+    for line in out.splitlines():
+        m = re.search(r":(\d+)\s", line)
+        if m:
+            result["udp"].add(int(m.group(1)))
+    return result
+
+
+def check_port_conflict(proto: str, dport: str) -> str | None:
+    """检查端口是否与本机已监听端口冲突，返回冲突描述或 None"""
+    listening = get_listening_ports()
+    protos = ["tcp", "udp"] if proto == "tcp+udp" else [proto]
+    # 解析端口：支持单端口和范围如 3000-3100
+    ports = []
+    if "-" in dport:
+        parts = dport.split("-", 1)
+        try:
+            ports = range(int(parts[0]), int(parts[1]) + 1)
+        except ValueError:
+            return None
+    else:
+        try:
+            ports = [int(dport)]
+        except ValueError:
+            return None
+    conflicts = []
+    for p in protos:
+        for port in ports:
+            if port in listening.get(p, set()):
+                conflicts.append(f"{p.upper()}:{port}")
+    if conflicts:
+        return f"端口 {', '.join(conflicts)} 已被本机占用"
+    return None
+
+def _build_ruleset(subnets: list[str], out_iface: str,
+                   proxy_ipsec: bool = False,
+                   dnat_rules: list[dict] | None = None) -> str:
+    lines = [f"table ip {TABLE_NAME} {{"]
+
+    # ── DNAT prerouting chain ──
+    if dnat_rules:
+        lines.append(f"    chain {CHAIN_DNAT} {{")
+        lines.append(f"        type nat hook prerouting priority dstnat; policy accept;")
+        for r in dnat_rules:
+            proto = r.get("proto", "tcp")
+            dport = r.get("dport", "")
+            to_addr = r.get("to_addr", "")
+            to_port = r.get("to_port", "")
+            if not dport or not to_addr:
+                continue
+            dest = to_addr if not to_port else f"{to_addr}:{to_port}"
+            comment = r.get("comment", "")
+            protos = ["tcp", "udp"] if proto == "tcp+udp" else [proto]
+            for p in protos:
+                rule = f"        {p} dport {dport} dnat to {dest}"
+                if comment:
+                    rule += f" comment \"{comment}\""
+                lines.append(rule)
+        lines.append(f"    }}")
+
+    # ── SNAT postrouting chain ──
+    lines.append(f"    chain {CHAIN_SNAT} {{")
+    lines.append(f"        type nat hook postrouting priority srcnat; policy accept;")
     if not proxy_ipsec:
-        # 排除所有 IPSec 流量：
-        #   rt ipsec exists  → 匹配被 XFRM policy 标记的包（policy-based）
-        #   oifname "xfrm*"  → 匹配走 xfrm 虚拟接口的包（route-based）
         lines.append(f"        rt ipsec exists accept")
         lines.append(f"        oifname \"xfrm*\" accept")
     for subnet in subnets:
@@ -52,23 +115,28 @@ def _build_ruleset(subnets: list[str], out_iface: str, proxy_ipsec: bool = False
         if not subnet:
             continue
         lines.append(f"        ip saddr {subnet} oifname {out_iface} masquerade")
-    lines += ["    }", "}"]
+    lines.append(f"    }}")
+
+    lines.append("}")
     return "\n".join(lines)
 
 
-def apply_nat(subnets: list[str], out_iface: str, proxy_ipsec: bool = False) -> tuple[int, str, str]:
-    if not subnets or not out_iface:
-        return 1, "", "子网列表和出口网卡不能为空"
-    # 预加载内核模块，确保 nftables ipsec/xfrm 匹配可用
+def apply_nat(subnets: list[str], out_iface: str,
+              proxy_ipsec: bool = False,
+              dnat_rules: list[dict] | None = None) -> tuple[int, str, str]:
+    if not subnets and not dnat_rules:
+        return 1, "", "至少需要配置 SNAT 子网或 DNAT 规则"
+    if subnets and not out_iface:
+        return 1, "", "SNAT 需要指定出口网卡"
     run("modprobe nft_xfrm 2>/dev/null")
     run("modprobe xfrm_interface 2>/dev/null")
-    ruleset = _build_ruleset(subnets, out_iface, proxy_ipsec)
+    ruleset = _build_ruleset(subnets, out_iface or "", proxy_ipsec, dnat_rules)
     run(f"nft delete table ip {TABLE_NAME} 2>/dev/null")
     code, out, err = run("nft -f -", input_text=ruleset)
     if code != 0:
         return code, out, err
     _persist(ruleset)
-    return 0, "SNAT 规则已应用", ""
+    return 0, "NAT 规则已应用", ""
 
 
 def _persist(ruleset: str):
@@ -89,7 +157,7 @@ def stop_nat() -> tuple[int, str, str]:
     p = Path(NFTCONF)
     if p.exists():
         p.unlink()
-    return 0, "SNAT 已停止", ""
+    return 0, "NAT 已停止", ""
 
 
 def get_current_rules() -> str:

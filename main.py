@@ -99,11 +99,13 @@ async def nat_apply(request: Request,
     subnet_list = [s.strip() for s in subnets.splitlines() if s.strip()]
     iface = out_iface.strip() or nat.check_env().get("default_iface", "")
     do_proxy = proxy_ipsec == "1"
-    # 持久化配置
     data = store.load()
-    data["nat"] = {"subnets": subnet_list, "out_iface": iface, "proxy_ipsec": do_proxy}
+    nat_cfg = data.get("nat", {})
+    nat_cfg.update({"subnets": subnet_list, "out_iface": iface, "proxy_ipsec": do_proxy})
+    data["nat"] = nat_cfg
     store.save(data)
-    code, out, err = nat.apply_nat(subnet_list, iface, do_proxy)
+    dnat_rules = nat_cfg.get("dnat_rules", [])
+    code, out, err = nat.apply_nat(subnet_list, iface, do_proxy, dnat_rules)
     return redirect("/nat", out or err, code == 0)
 
 @app.post("/nat/stop")
@@ -122,6 +124,61 @@ async def nat_install_nft():
         yield from (f"data: {line}\n\n" for line in ctl.pkg_install_stream("nftables"))
         yield "data: __DONE__\n\n"
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+# ── DNAT management ───────────────────────────────────────────────────────────
+
+@app.get("/api/nat/dnat")
+async def api_dnat_list():
+    data = store.load()
+    return JSONResponse({"rules": data.get("nat", {}).get("dnat_rules", [])})
+
+@app.post("/api/nat/dnat")
+async def api_dnat_add(request: Request):
+    body = await request.json()
+    proto = body.get("proto", "tcp")
+    dport = str(body.get("dport", "")).strip()
+    to_addr = str(body.get("to_addr", "")).strip()
+    to_port = str(body.get("to_port", "")).strip()
+    comment = str(body.get("comment", "")).strip()
+    if not dport or not to_addr:
+        return JSONResponse({"ok": False, "msg": "外部端口和目标地址不能为空"})
+    conflict = nat.check_port_conflict(proto, dport)
+    if conflict:
+        return JSONResponse({"ok": False, "msg": conflict})
+    rule = {"proto": proto, "dport": dport, "to_addr": to_addr, "to_port": to_port, "comment": comment}
+    data = store.load()
+    nat_cfg = data.setdefault("nat", {"subnets": [], "out_iface": "", "proxy_ipsec": False})
+    rules = nat_cfg.setdefault("dnat_rules", [])
+    rules.append(rule)
+    store.save(data)
+    # 重新应用全部 NAT 规则
+    code, out, err = nat.apply_nat(
+        nat_cfg.get("subnets", []),
+        nat_cfg.get("out_iface", "") or nat.check_env().get("default_iface", ""),
+        nat_cfg.get("proxy_ipsec", False),
+        rules,
+    )
+    return JSONResponse({"ok": code == 0, "msg": out or err})
+
+@app.post("/api/nat/dnat/delete")
+async def api_dnat_delete(request: Request):
+    body = await request.json()
+    idx = body.get("index", -1)
+    data = store.load()
+    rules = data.get("nat", {}).get("dnat_rules", [])
+    if not (0 <= idx < len(rules)):
+        return JSONResponse({"ok": False, "msg": "索引无效"})
+    rules.pop(idx)
+    data["nat"]["dnat_rules"] = rules
+    store.save(data)
+    nat_cfg = data["nat"]
+    code, out, err = nat.apply_nat(
+        nat_cfg.get("subnets", []),
+        nat_cfg.get("out_iface", "") or nat.check_env().get("default_iface", ""),
+        nat_cfg.get("proxy_ipsec", False),
+        rules,
+    )
+    return JSONResponse({"ok": code == 0, "msg": out or err or "DNAT 规则已删除"})
 
 # ── instance control ──────────────────────────────────────────────────────────
 

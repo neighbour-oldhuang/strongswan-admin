@@ -66,7 +66,7 @@
     </div>
     <div style="margin-top:16px;display:flex;gap:8px">
       <button type="submit" class="btn btn-primary">✓ 应用 SNAT 规则</button>
-      <button type="button" class="btn btn-danger" onclick="stopNat()">■ 停止 SNAT</button>
+      <button type="button" class="btn btn-danger" onclick="stopNat()">■ 停止 NAT</button>
     </div>
   </form>
 </div>
@@ -74,10 +74,52 @@
 <!-- 当前规则 -->
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <span class="card-title" style="margin:0">当前 nftables SNAT 规则</span>
+    <span class="card-title" style="margin:0">当前 nftables NAT 规则</span>
     <button class="btn btn-ghost btn-sm" onclick="loadRules()">↻ 刷新</button>
   </div>
   <div class="logbox" id="rules-box" style="max-height:240px">加载中…</div>
+</div>
+
+<!-- DNAT 端口转发 -->
+<div class="card">
+  <div class="card-title">DNAT 端口转发</div>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:12px">将本机外部端口的流量转发到内网（或隧道对端）的指定地址和端口</p>
+  <div class="form-grid" id="dnat-form">
+    <div class="field">
+      <label>协议</label>
+      <select id="dnat-proto">
+        <option value="tcp">TCP</option>
+        <option value="udp">UDP</option>
+        <option value="tcp+udp">TCP+UDP</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>外部端口</label>
+      <input type="text" id="dnat-dport" placeholder="如 8080 或 3000-3100">
+      <span class="hint">本机监听的端口或端口范围</span>
+    </div>
+    <div class="field">
+      <label>目标地址</label>
+      <input type="text" id="dnat-to-addr" placeholder="如 192.168.1.100">
+      <span class="hint">转发到的内网 IP</span>
+    </div>
+    <div class="field">
+      <label>目标端口</label>
+      <input type="text" id="dnat-to-port" placeholder="留空则与外部端口相同">
+      <span class="hint">目标主机上的端口，留空保持不变</span>
+    </div>
+    <div class="field" style="grid-column:1/-1">
+      <label>备注</label>
+      <input type="text" id="dnat-comment" placeholder="可选备注">
+    </div>
+  </div>
+  <div style="margin-top:12px">
+    <button class="btn btn-primary btn-sm" onclick="addDnat()">+ 添加规则</button>
+  </div>
+  <table style="margin-top:16px;font-size:13px">
+    <thead><tr><th>协议</th><th>外部端口</th><th>目标地址</th><th>目标端口</th><th>备注</th><th>操作</th></tr></thead>
+    <tbody id="dnat-body"><tr><td colspan="6" style="color:var(--muted)">加载中…</td></tr></tbody>
+  </table>
 </div>
 
 </div>
@@ -120,7 +162,7 @@ async function loadRules() {
 }
 
 async function stopNat() {
-  if (!confirm('确认停止 SNAT？')) return;
+  if (!confirm('确认停止所有 NAT 规则？')) return;
   await fetch('/nat/stop', {method: 'POST'});
   location.reload();
 }
@@ -135,7 +177,55 @@ async function installNft(btn) {
   es.onerror = () => { es.close(); loadEnv(); };
 }
 
-loadEnv(); loadOptimize(); loadRules();
+async function loadDnat() {
+  const res = await fetch('/api/nat/dnat');
+  const d = await res.json();
+  const rules = d.rules || [];
+  const tbody = document.getElementById('dnat-body');
+  if (!rules.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">暂无 DNAT 规则</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rules.map((r, i) =>
+    `<tr>
+      <td>${r.proto}</td>
+      <td>${r.dport}</td>
+      <td>${r.to_addr}</td>
+      <td>${r.to_port || '—'}</td>
+      <td>${r.comment || '—'}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="delDnat(${i})">删除</button></td>
+    </tr>`
+  ).join('');
+}
+
+async function addDnat() {
+  const body = {
+    proto:   document.getElementById('dnat-proto').value,
+    dport:   document.getElementById('dnat-dport').value.trim(),
+    to_addr: document.getElementById('dnat-to-addr').value.trim(),
+    to_port: document.getElementById('dnat-to-port').value.trim(),
+    comment: document.getElementById('dnat-comment').value.trim(),
+  };
+  if (!body.dport || !body.to_addr) { alert('外部端口和目标地址不能为空'); return; }
+  const res = await fetch('/api/nat/dnat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const d = await res.json();
+  if (!d.ok) { alert(d.msg); return; }
+  document.getElementById('dnat-dport').value = '';
+  document.getElementById('dnat-to-addr').value = '';
+  document.getElementById('dnat-to-port').value = '';
+  document.getElementById('dnat-comment').value = '';
+  loadDnat(); loadRules();
+}
+
+async function delDnat(idx) {
+  if (!confirm('确认删除此 DNAT 规则？')) return;
+  const res = await fetch('/api/nat/dnat/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:idx})});
+  const d = await res.json();
+  if (!d.ok) alert(d.msg);
+  loadDnat(); loadRules();
+}
+
+loadEnv(); loadOptimize(); loadRules(); loadDnat();
 </script>
 </body>
 </html>
