@@ -266,18 +266,18 @@ def get_traffic_stats() -> dict:
                 result["ipsec"]["rx"] += rx
                 result["ipsec"]["tx"] += tx
 
-    # IPSec policy-based: 从 swanctl --list-sas 获取字节数
+    # IPSec: 从 swanctl --list-sas 获取字节数
     if not result["ipsec"]["interfaces"]:
         _, out, _ = run("swanctl --list-sas 2>/dev/null")
         total_rx = total_tx = 0
         for line in out.splitlines():
-            # 匹配: "12345 bytes_i (321 pkts, 12s ago), 67890 bytes_o (123 pkts, 5s ago)"
-            m_in = re.search(r"(\d+)\s+bytes_i", line)
-            m_out = re.search(r"(\d+)\s+bytes_o", line)
-            if m_in:
-                total_rx += int(m_in.group(1))
-            if m_out:
-                total_tx += int(m_out.group(1))
+            # "    in  ce5a8bf9,  61794 bytes, ..."
+            m = re.match(r"\s+(in|out)\s+\w+,\s+(\d+)\s+bytes", line)
+            if m:
+                if m.group(1) == "in":
+                    total_rx += int(m.group(2))
+                else:
+                    total_tx += int(m.group(2))
         result["ipsec"]["rx"] = total_rx
         result["ipsec"]["tx"] = total_tx
 
