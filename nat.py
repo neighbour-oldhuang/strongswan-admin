@@ -43,9 +43,9 @@ def _build_ruleset(subnets: list[str], out_iface: str, proxy_ipsec: bool = False
     ]
     if not proxy_ipsec:
         # 排除所有 IPSec 流量：
-        #   meta ipsec exists → 匹配被 XFRM policy 标记的包（policy-based）
+        #   rt ipsec exists  → 匹配被 XFRM policy 标记的包（policy-based）
         #   oifname "xfrm*"  → 匹配走 xfrm 虚拟接口的包（route-based）
-        lines.append(f"        meta ipsec exists accept")
+        lines.append(f"        rt ipsec exists accept")
         lines.append(f"        oifname \"xfrm*\" accept")
     for subnet in subnets:
         subnet = subnet.strip()
@@ -59,6 +59,9 @@ def _build_ruleset(subnets: list[str], out_iface: str, proxy_ipsec: bool = False
 def apply_nat(subnets: list[str], out_iface: str, proxy_ipsec: bool = False) -> tuple[int, str, str]:
     if not subnets or not out_iface:
         return 1, "", "子网列表和出口网卡不能为空"
+    # 预加载内核模块，确保 nftables ipsec/xfrm 匹配可用
+    run("modprobe nft_xfrm 2>/dev/null")
+    run("modprobe xfrm_interface 2>/dev/null")
     ruleset = _build_ruleset(subnets, out_iface, proxy_ipsec)
     run(f"nft delete table ip {TABLE_NAME} 2>/dev/null")
     code, out, err = run("nft -f -", input_text=ruleset)
