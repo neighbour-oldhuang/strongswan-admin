@@ -107,6 +107,32 @@
   {% endif %}
 </div>
 
+<!-- Traffic Stats -->
+<div class="grid2">
+  <div class="card">
+    <div class="card-title">IPSec VPN 流量</div>
+    <table style="font-size:13px">
+      <tbody>
+        <tr><td>↓ 下行总量</td><td id="ipsec-rx" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+        <tr><td>↑ 上行总量</td><td id="ipsec-tx" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+        <tr><td>↓ 实时下行</td><td id="ipsec-rx-rate" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+        <tr><td>↑ 实时上行</td><td id="ipsec-tx-rate" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-title">NAT 出口流量 <span id="nat-iface-label" style="font-size:11px;color:var(--muted)"></span></div>
+    <table style="font-size:13px">
+      <tbody>
+        <tr><td>↓ 下行总量</td><td id="nat-rx" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+        <tr><td>↑ 上行总量</td><td id="nat-tx" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+        <tr><td>↓ 实时下行</td><td id="nat-rx-rate" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+        <tr><td>↑ 实时上行</td><td id="nat-tx-rate" style="font-family:monospace;min-width:100px;text-align:right">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <!-- SA Status + Logs -->
 <div class="grid2">
   <div class="card">
@@ -240,6 +266,45 @@ async function refreshStatus() {
 }
 refreshLogs(); setInterval(refreshLogs, 10000);
 refreshStatus(); setInterval(refreshStatus, 8000);
+
+function fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+  return (b/1073741824).toFixed(2) + ' GB';
+}
+function fmtRate(bps) {
+  if (bps < 0) bps = 0;
+  if (bps < 1024) return bps.toFixed(0) + ' B/s';
+  if (bps < 1048576) return (bps/1024).toFixed(1) + ' KB/s';
+  if (bps < 1073741824) return (bps/1048576).toFixed(1) + ' MB/s';
+  return (bps/1073741824).toFixed(1) + ' GB/s';
+}
+
+let lastTraffic = null, lastTime = 0;
+async function refreshTraffic() {
+  try {
+    const r = await fetch('/api/traffic');
+    const d = await r.json();
+    const now = Date.now();
+    document.getElementById('ipsec-rx').textContent = fmtBytes(d.ipsec.rx);
+    document.getElementById('ipsec-tx').textContent = fmtBytes(d.ipsec.tx);
+    document.getElementById('nat-rx').textContent = fmtBytes(d.nat.rx);
+    document.getElementById('nat-tx').textContent = fmtBytes(d.nat.tx);
+    if (d.nat.interface) document.getElementById('nat-iface-label').textContent = '— ' + d.nat.interface;
+    if (lastTraffic && lastTime) {
+      const dt = (now - lastTime) / 1000;
+      if (dt > 0) {
+        document.getElementById('ipsec-rx-rate').textContent = fmtRate((d.ipsec.rx - lastTraffic.ipsec.rx) / dt);
+        document.getElementById('ipsec-tx-rate').textContent = fmtRate((d.ipsec.tx - lastTraffic.ipsec.tx) / dt);
+        document.getElementById('nat-rx-rate').textContent = fmtRate((d.nat.rx - lastTraffic.nat.rx) / dt);
+        document.getElementById('nat-tx-rate').textContent = fmtRate((d.nat.tx - lastTraffic.nat.tx) / dt);
+      }
+    }
+    lastTraffic = d; lastTime = now;
+  } catch {}
+}
+refreshTraffic(); setInterval(refreshTraffic, 3000);
 </script>
 </body>
 </html>

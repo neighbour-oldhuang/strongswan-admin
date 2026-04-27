@@ -237,3 +237,62 @@ def write_swanctl(connections: dict):
             iface = f"xfrm{idx}"
             run(f"ip link show {iface} 2>/dev/null || ip link add {iface} type xfrm if_id {idx}")
             run(f"ip link set {iface} up")
+
+
+# ── traffic stats ─────────────────────────────────────────────────────────────
+
+def _iface_bytes(iface: str) -> tuple[int, int]:
+    """返回 (rx_bytes, tx_bytes)，接口不存在返回 (0, 0)"""
+    base = f"/sys/class/net/{iface}/statistics"
+    try:
+        rx = int(Path(f"{base}/rx_bytes").read_text().strip())
+        tx = int(Path(f"{base}/tx_bytes").read_text().strip())
+        return rx, tx
+    except (FileNotFoundError, ValueError):
+        return 0, 0
+
+
+def get_traffic_stats() -> dict:
+    """采集 IPSec xfrm 接口和 NAT 出口网卡的流量计数"""
+    result = {"ipsec": {"rx": 0, "tx": 0, "interfaces": {}}, "nat": {"rx": 0, "tx": 0, "interface": ""}}
+
+    # IPSec: 汇总所有 xfrm* 接口
+    net_dir = Path("/sys/class/net")
+    if net_dir.exists():
+        for iface in net_dir.iterdir():
+            if iface.name.startswith("xfrm"):
+                rx, tx = _iface_bytes(iface.name)
+                result["ipsec"]["interfaces"][iface.name] = {"rx": rx, "tx": tx}
+                result["ipsec"]["rx"] += rx
+                result["ipsec"]["tx"] += tx
+
+    # IPSec policy-based: 从 xfrm state 获取字节数
+    if not result["ipsec"]["interfaces"]:
+        _, out, _ = run("ip -s xfrm state 2>/dev/null")
+        total_rx = total_tx = 0
+        current_dir = None
+        for line in out.splitlines():
+            if "dir out" in line or "proto ESP" in line:
+                current_dir = "out"
+            elif "dir in" in line:
+                current_dir = "in"
+            m = re.search(r"(\d+)\(bytes\)", line)
+            if m and current_dir:
+                b = int(m.group(1))
+                if current_dir == "out":
+                    total_tx += b
+                else:
+                    total_rx += b
+                current_dir = None
+        result["ipsec"]["rx"] = total_rx
+        result["ipsec"]["tx"] = total_tx
+
+    # NAT: 出口网卡流量
+    _, route_out, _ = run("ip route show default")
+    m = re.search(r"dev (\S+)", route_out)
+    if m:
+        iface = m.group(1)
+        rx, tx = _iface_bytes(iface)
+        result["nat"] = {"rx": rx, "tx": tx, "interface": iface}
+
+    return result

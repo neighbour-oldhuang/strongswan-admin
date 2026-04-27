@@ -513,6 +513,10 @@ async def api_sa_status():
 async def api_status():
     return JSONResponse(ctl.status())
 
+@app.get("/api/traffic")
+async def api_traffic():
+    return JSONResponse(ctl.get_traffic_stats())
+
 @app.get("/api/logs")
 async def api_logs():
     return JSONResponse({"logs": ctl.get_logs()})
