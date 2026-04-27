@@ -1,4 +1,14 @@
 import subprocess, shutil, re, os
+from pathlib import Path
+
+def _swanctl_dir() -> str:
+    """自动检测 swanctl 配置根目录"""
+    for d in ("/etc/strongswan/swanctl", "/etc/swanctl"):
+        if Path(d).is_dir():
+            return d
+    return "/etc/swanctl"
+
+SWANCTL_DIR = _swanctl_dir()
 
 def run(cmd: str, input_text: str = None, timeout: int = 15) -> tuple[int, str, str]:
     r = subprocess.run(
@@ -62,14 +72,14 @@ def generate_cert(cn: str, days: int = 3650) -> tuple:
     import os
     if not re.fullmatch(r'[A-Za-z0-9._-]+', cn):
         return 1, "", "CN 只允许字母、数字、点、连字符和下划线"
-    os.makedirs("/etc/swanctl/x509ca", exist_ok=True)
-    os.makedirs("/etc/swanctl/x509", exist_ok=True)
-    os.makedirs("/etc/swanctl/private", exist_ok=True)
+    os.makedirs(f"{SWANCTL_DIR}/x509ca", exist_ok=True)
+    os.makedirs(f"{SWANCTL_DIR}/x509", exist_ok=True)
+    os.makedirs(f"{SWANCTL_DIR}/private", exist_ok=True)
 
-    ca_key  = f"/etc/swanctl/private/{cn}-ca.key.pem"
-    ca_cert = f"/etc/swanctl/x509ca/{cn}-ca.pem"
-    sv_key  = f"/etc/swanctl/private/{cn}.key.pem"
-    sv_cert = f"/etc/swanctl/x509/{cn}.pem"
+    ca_key  = f"{SWANCTL_DIR}/private/{cn}-ca.key.pem"
+    ca_cert = f"{SWANCTL_DIR}/x509ca/{cn}-ca.pem"
+    sv_key  = f"{SWANCTL_DIR}/private/{cn}.key.pem"
+    sv_cert = f"{SWANCTL_DIR}/x509/{cn}.pem"
 
     cmds = [
         # CA 私钥 + 自签名证书
@@ -216,7 +226,7 @@ def write_swanctl(connections: dict):
         lines.extend(secret_block)
         lines.append("}")
 
-    conf_dir = "/etc/swanctl/conf.d"
+    conf_dir = f"{SWANCTL_DIR}/conf.d"
     os.makedirs(conf_dir, exist_ok=True)
     with open(f"{conf_dir}/admin.conf", "w") as f:
         f.write("\n".join(lines) + "\n")

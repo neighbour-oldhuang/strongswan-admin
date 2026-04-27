@@ -150,6 +150,7 @@ def _persist(ruleset: str):
         if include_line not in content:
             with open(main_conf, "a") as f:
                 f.write(f"\n{include_line}\n")
+    run("systemctl enable nftables 2>/dev/null")
 
 
 def stop_nat() -> tuple[int, str, str]:

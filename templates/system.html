@@ -43,6 +43,48 @@
 
 {% include '_route_modal.html' %}
 
+<!-- OIDC 认证配置 -->
+<div class="card">
+  <div class="card-title">OpenID Connect 认证</div>
+  <div class="form-grid" id="oidc-form">
+    <div class="field" style="grid-column:1/-1">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="oidc-enabled" style="width:16px;height:16px;accent-color:var(--accent)">
+        启用 OIDC 认证
+      </label>
+      <span class="hint">关闭后所有用户无需登录即可访问</span>
+    </div>
+    <div class="field">
+      <label>Issuer URL</label>
+      <input type="text" id="oidc-issuer" placeholder="https://idp.example.com/openid">
+      <span class="hint">IdP 的 OpenID Connect issuer 地址</span>
+    </div>
+    <div class="field">
+      <label>Client ID</label>
+      <input type="text" id="oidc-client-id" placeholder="strongswan-admin">
+    </div>
+    <div class="field">
+      <label>Client Secret</label>
+      <input type="password" id="oidc-client-secret" placeholder="留空保持不变">
+      <span class="hint">修改时填写新值，留掩码不变则保留原值</span>
+    </div>
+    <div class="field">
+      <label>回调地址 (Redirect URI)</label>
+      <input type="text" id="oidc-redirect-uri" placeholder="自动生成，也可手动指定">
+      <span class="hint">在 IdP 中注册的回调地址，如 http://host:8080/auth/callback</span>
+    </div>
+    <div class="field">
+      <label>授权组名</label>
+      <input type="text" id="oidc-required-group" placeholder="opsadmin">
+      <span class="hint">用户必须属于此组才能访问，IdP 需返回 groups claim</span>
+    </div>
+  </div>
+  <div style="margin-top:16px">
+    <button class="btn btn-primary btn-sm" onclick="saveOidc()">✓ 保存 OIDC 配置</button>
+    <span id="oidc-msg" style="margin-left:12px;font-size:12px"></span>
+  </div>
+</div>
+
 <script>
 async function loadSysctls() {
   const res = await fetch('/api/sysctls');
@@ -87,6 +129,35 @@ async function delRoute(dst, via, dev) {
 
 loadSysctls();
 loadRoutes();
+loadOidc();
+
+async function loadOidc() {
+  const res = await fetch('/api/oidc');
+  const c = await res.json();
+  document.getElementById('oidc-enabled').checked = c.enabled;
+  document.getElementById('oidc-issuer').value = c.issuer || '';
+  document.getElementById('oidc-client-id').value = c.client_id || '';
+  document.getElementById('oidc-client-secret').value = c.client_secret || '';
+  document.getElementById('oidc-redirect-uri').value = c.redirect_uri || '';
+  document.getElementById('oidc-required-group').value = c.required_group || 'opsadmin';
+}
+
+async function saveOidc() {
+  const body = {
+    enabled:        document.getElementById('oidc-enabled').checked,
+    issuer:         document.getElementById('oidc-issuer').value.trim(),
+    client_id:      document.getElementById('oidc-client-id').value.trim(),
+    client_secret:  document.getElementById('oidc-client-secret').value,
+    redirect_uri:   document.getElementById('oidc-redirect-uri').value.trim(),
+    required_group: document.getElementById('oidc-required-group').value.trim(),
+  };
+  const res = await fetch('/api/oidc', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const d = await res.json();
+  const msg = document.getElementById('oidc-msg');
+  msg.textContent = d.ok ? '✓ 已保存' : '✗ ' + d.msg;
+  msg.style.color = d.ok ? 'var(--accent2)' : 'var(--danger)';
+  if (d.ok) loadOidc();
+}
 </script>
 </body>
 </html>

@@ -5,4 +5,8 @@
   <a href="/certs" {% if active_nav == 'certs' %}class="active"{% endif %}>证书管理</a>
   <a href="/nat" {% if active_nav == 'nat' %}class="active"{% endif %}>NAT 管理</a>
   <a href="/system" {% if active_nav == 'system' %}class="active"{% endif %}>系统配置</a>
+  {% if request.session and request.session.get('user') %}
+  <span style="margin-left:auto;font-size:12px;color:var(--muted)">{{ request.session.get('user') }}</span>
+  <a href="/auth/logout" style="font-size:12px">退出</a>
+  {% endif %}
 </nav>

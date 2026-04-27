@@ -3,11 +3,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
-import store, ctl, nat, shutil, os, re
+import store, ctl, nat, shutil, os, re, auth
 
 app = FastAPI(title="StrongSwan Admin")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+auth.setup(app)
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +68,25 @@ async def route_del(request: Request, dst: str = Form(...), via: str = Form(""),
     if request.headers.get("accept") == "application/json":
         return JSONResponse({"ok": code == 0, "msg": out or err})
     return redirect("/system", out or err or f"路由 {dst} 已删除", code == 0)
+
+# ── OIDC settings ─────────────────────────────────────────────────────────────
+
+@app.get("/api/oidc")
+async def api_oidc_get():
+    return JSONResponse(auth.get_cfg())
+
+@app.post("/api/oidc")
+async def api_oidc_save(request: Request):
+    body = await request.json()
+    auth.save_cfg({
+        "enabled":        body.get("enabled", False),
+        "issuer":         str(body.get("issuer", "")).strip(),
+        "client_id":      str(body.get("client_id", "")).strip(),
+        "client_secret":  str(body.get("client_secret", "")).strip(),
+        "redirect_uri":   str(body.get("redirect_uri", "")).strip(),
+        "required_group": str(body.get("required_group", "opsadmin")).strip(),
+    })
+    return JSONResponse({"ok": True, "msg": "OIDC 配置已保存"})
 
 # ── NAT management ────────────────────────────────────────────────────────────
 
@@ -223,8 +243,8 @@ _COMMON_FIELDS = [
     ("auth_local",    "本端认证方式",    "select", "psk",             "psk=预共享密钥；pubkey=证书"),
     ("auth_remote",   "对端认证方式",    "select", "psk",             "同上"),
     ("psk",           "预共享密钥 PSK", "password","",               "auth=psk 时填写，双端必须一致"),
-    ("local_cert",    "本端证书文件名",  "text",   "",                "pubkey 认证时，/etc/swanctl/x509/ 下的文件名"),
-    ("remote_cert",   "对端证书文件名",  "text",   "",                "pubkey 认证时，/etc/swanctl/x509ca/ 下的 CA 文件名"),
+    ("local_cert",    "本端证书文件名",  "text",   "",                "pubkey 认证时，x509/ 下的文件名"),
+    ("remote_cert",   "对端证书文件名",  "text",   "",                "pubkey 认证时，x509ca/ 下的 CA 文件名"),
     ("proposals",     "IKE 加密提案",   "select", "aes256-sha256-modp2048", "格式：加密-完整性-DH组，如 modp2048=DH14、modp1024=DH2、ecp256=DH19、ecp384=DH20，需与对端一致"),
     ("esp_proposals", "ESP 加密提案",   "select", "aes256-sha256",          "格式：加密-完整性，对应对端 IPSec/ESP 算法配置，需与对端一致"),
     ("start_action",  "启动动作",        "select", "none",            "none=手动；start=自动发起；trap=按需触发"),
@@ -286,8 +306,8 @@ def _fields_for(conn: dict):
 def _cert_lists():
     def ls(p): return sorted(f.name for f in Path(p).glob("*") if f.is_file()) if Path(p).exists() else []
     return {
-        "local_certs": ls("/etc/swanctl/x509"),
-        "ca_certs":    ls("/etc/swanctl/x509ca"),
+        "local_certs": ls(f"{ctl.SWANCTL_DIR}/x509"),
+        "ca_certs":    ls(f"{ctl.SWANCTL_DIR}/x509ca"),
     }
 
 @app.get("/connections/new", response_class=HTMLResponse)
@@ -393,16 +413,16 @@ async def certs_page(request: Request):
     def ls(p): return sorted(Path(p).glob("*")) if Path(p).exists() else []
     return templates.TemplateResponse("certs.html", {
         "request": request,
-        "ca_certs":    ls("/etc/swanctl/x509ca"),
-        "local_certs": ls("/etc/swanctl/x509"),
-        "private_keys":ls("/etc/swanctl/private"),
+        "ca_certs":    ls(f"{ctl.SWANCTL_DIR}/x509ca"),
+        "local_certs": ls(f"{ctl.SWANCTL_DIR}/x509"),
+        "private_keys":ls(f"{ctl.SWANCTL_DIR}/private"),
         "ok":  request.query_params.get("ok"),
         "err": request.query_params.get("err"),
     })
 
 @app.post("/certs/upload")
 async def cert_upload(cert_type: str = Form(...), file: UploadFile = File(...)):
-    dirs = {"ca": "/etc/swanctl/x509ca", "local": "/etc/swanctl/x509", "key": "/etc/swanctl/private"}
+    dirs = {"ca": f"{ctl.SWANCTL_DIR}/x509ca", "local": f"{ctl.SWANCTL_DIR}/x509", "key": f"{ctl.SWANCTL_DIR}/private"}
     d = dirs.get(cert_type)
     if not d:
         return redirect("/certs", "未知类型", False)
@@ -420,7 +440,7 @@ async def cert_upload(cert_type: str = Form(...), file: UploadFile = File(...)):
 
 @app.post("/certs/delete")
 async def cert_delete(cert_type: str = Form(...), filename: str = Form(...)):
-    dirs = {"ca": "/etc/swanctl/x509ca", "local": "/etc/swanctl/x509", "key": "/etc/swanctl/private"}
+    dirs = {"ca": f"{ctl.SWANCTL_DIR}/x509ca", "local": f"{ctl.SWANCTL_DIR}/x509", "key": f"{ctl.SWANCTL_DIR}/private"}
     d = dirs.get(cert_type)
     if d:
         p = Path(d) / filename
