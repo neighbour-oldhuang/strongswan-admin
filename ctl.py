@@ -1,4 +1,4 @@
-import subprocess, shutil, re
+import subprocess, shutil, re, os
 
 def run(cmd: str, input_text: str = None, timeout: int = 15) -> tuple[int, str, str]:
     r = subprocess.run(
@@ -6,6 +6,33 @@ def run(cmd: str, input_text: str = None, timeout: int = 15) -> tuple[int, str, 
         input=input_text, timeout=timeout
     )
     return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+def _pkg_mgr() -> str:
+    """检测包管理器：dnf > yum > apt-get"""
+    for m in ("dnf", "yum", "apt-get"):
+        if shutil.which(m):
+            return m
+    return "apt-get"
+
+def pkg_install_stream(packages: str):
+    """通用包安装生成器，yield 进度行，兼容 apt/yum/dnf"""
+    mgr = _pkg_mgr()
+    env = {"DEBIAN_FRONTEND": "noninteractive",
+           "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+    if mgr == "apt-get":
+        yield f">>> apt-get update ...\n"
+        proc = subprocess.Popen(["apt-get", "update", "-y"],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        for line in proc.stdout:
+            yield line
+        proc.wait()
+    yield f">>> {mgr} install {packages} ...\n"
+    cmd = [mgr, "install", "-y"] + packages.split()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    for line in proc.stdout:
+        yield line
+    rc = proc.wait()
+    yield f">>> {'✅ 安装完成！' if rc == 0 else f'❌ 安装失败，退出码 {rc}'}\n"
 
 def run_bg(cmd: str) -> tuple[int, str, str]:
     """fire-and-forget，不等待结果"""
@@ -27,7 +54,7 @@ def restart():return run("systemctl restart strongswan 2>/dev/null || systemctl 
 def reload(): return run("swanctl --load-all 2>/dev/null") if shutil.which("swanctl") else run("ipsec reload")
 
 def get_logs(lines=80) -> str:
-    _, out, _ = run(f"journalctl -u strongswan -u strongswan-starter -n {lines} --no-pager 2>/dev/null || tail -n {lines} /var/log/syslog 2>/dev/null | grep -i charon || echo '(no logs)'")
+    _, out, _ = run(f"journalctl -u strongswan -u strongswan-starter -n {lines} --no-pager 2>/dev/null || tail -n {lines} /var/log/syslog 2>/dev/null | grep -i charon || tail -n {lines} /var/log/messages 2>/dev/null | grep -i charon || echo '(no logs)'")
     return out
 
 def generate_cert(cn: str, days: int = 3650) -> tuple:
@@ -106,26 +133,15 @@ def del_route(dst: str, via: str, dev: str) -> tuple:
     return _route_cmd("del", dst, via, dev)
 
 def install():
-    """通过 apt-get 安装 strongswan，以生成器方式 yield 进度行"""
-    import subprocess, sys
-    pkgs = "strongswan strongswan-pki strongswan-swanctl charon-systemd libcharon-extra-plugins libcharon-extauth-plugins libstrongswan-standard-plugins libstrongswan-extra-plugins"
-    cmd = ["apt-get", "install", "-y", pkgs]
-    env = {"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-    # 先 update
-    yield ">>> apt-get update ...\n"
-    proc = subprocess.Popen(["apt-get", "update", "-y"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    for line in proc.stdout:
-        yield line
-    proc.wait()
-    yield f">>> apt-get install {pkgs} ...\n"
-    proc = subprocess.Popen(["apt-get", "install", "-y"] + pkgs.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    for line in proc.stdout:
-        yield line
-    rc = proc.wait()
-    if rc == 0:
-        yield ">>> ✅ 安装完成！\n"
+    """安装 strongswan，兼容 apt/yum/dnf"""
+    mgr = _pkg_mgr()
+    if mgr == "apt-get":
+        pkgs = "strongswan strongswan-pki strongswan-swanctl charon-systemd libcharon-extra-plugins libcharon-extauth-plugins libstrongswan-standard-plugins libstrongswan-extra-plugins"
     else:
-        yield f">>> ❌ 安装失败，退出码 {rc}\n"
+        # RHEL/CentOS: 需要 epel-release，strongswan 是单包
+        yield from pkg_install_stream("epel-release")
+        pkgs = "strongswan"
+    yield from pkg_install_stream(pkgs)
 
 def write_swanctl(connections: dict):
     """Generate /etc/swanctl/conf.d/admin.conf from stored connections."""

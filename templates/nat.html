@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NAT 管理 — StrongSwan Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% set active_nav = 'nat' %}
+{% include '_nav.html' %}
+<div class="container">
+
+{% if ok %}<div class="flash flash-ok">✓ {{ ok }}</div>{% endif %}
+{% if err %}<div class="flash flash-err">✗ {{ err }}</div>{% endif %}
+
+<!-- 环境检测 -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span class="card-title" style="margin:0">环境检测</span>
+    <button class="btn btn-ghost btn-sm" onclick="loadEnv()">↻ 刷新</button>
+  </div>
+  <table style="font-size:13px">
+    <thead><tr><th>检测项</th><th>状态</th></tr></thead>
+    <tbody id="env-body"><tr><td colspan="2" style="color:var(--muted)">加载中…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- 性能优化 -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span class="card-title" style="margin:0">SNAT 性能优化</span>
+    <form method="post" action="/nat/optimize">
+      <button class="btn btn-primary btn-sm">⚡ 一键优化</button>
+    </form>
+  </div>
+  <table style="font-size:13px">
+    <thead><tr><th>参数</th><th>当前值</th><th>推荐值</th><th>状态</th></tr></thead>
+    <tbody id="opt-body"><tr><td colspan="4" style="color:var(--muted)">加载中…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- SNAT 配置 -->
+<div class="card">
+  <div class="card-title">SNAT 网关配置</div>
+  <form id="nat-form" method="post" action="/nat/apply">
+    <div class="form-grid">
+      <div class="field">
+        <label>代理上网的内网网段</label>
+        <textarea name="subnets" id="nat-subnets" rows="3" placeholder="每行一个，如：&#10;192.168.1.0/24&#10;10.0.0.0/8"
+          style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px;resize:vertical;font-family:monospace">{{ nat_cfg.subnets | join('\n') }}</textarea>
+        <span class="hint">每行一个 CIDR 网段，这些网段的流量将通过本机 SNAT 上网</span>
+      </div>
+      <div class="field">
+        <label>出口网卡</label>
+        <input type="text" name="out_iface" id="nat-iface" value="{{ nat_cfg.out_iface }}" placeholder="自动检测">
+        <span class="hint">留空自动使用默认路由网卡，也可手动指定如 eth0</span>
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="proxy_ipsec" value="1" {{ 'checked' if nat_cfg.proxy_ipsec else '' }}
+            style="width:16px;height:16px;accent-color:var(--accent)">
+          代理 IPSec 隧道流量上网
+        </label>
+        <span class="hint">开启后，IPSec 隧道对端的流量也会通过本机 SNAT 出去上网；关闭时自动排除 xfrm 接口流量以避免与 strongSwan 路由冲突</span>
+      </div>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:8px">
+      <button type="submit" class="btn btn-primary">✓ 应用 SNAT 规则</button>
+      <button type="button" class="btn btn-danger" onclick="stopNat()">■ 停止 SNAT</button>
+    </div>
+  </form>
+</div>
+
+<!-- 当前规则 -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span class="card-title" style="margin:0">当前 nftables SNAT 规则</span>
+    <button class="btn btn-ghost btn-sm" onclick="loadRules()">↻ 刷新</button>
+  </div>
+  <div class="logbox" id="rules-box" style="max-height:240px">加载中…</div>
+</div>
+
+</div>
+
+<script>
+async function loadEnv() {
+  const res = await fetch('/api/nat/env');
+  const d = await res.json();
+  const rows = [
+    ['nftables', d.nftables_installed ? `✅ 已安装 (${d.nftables_version})` : '❌ 未安装 <button class="btn btn-primary btn-sm" style="margin-left:8px" onclick="installNft(this)">⬇ 一键安装</button>'],
+    ['IP 转发', d.ip_forward ? '✅ 已开启' : '❌ 未开启 — 请在系统配置中应用推荐内核参数'],
+    ['默认出口网卡', d.default_iface ? `✅ ${d.default_iface}` : '⚠ 未检测到默认路由'],
+    ['SNAT 规则', d.nat_table_active ? '🟢 运行中' : '⚪ 未启用'],
+  ];
+  document.getElementById('env-body').innerHTML = rows.map(([k, v]) =>
+    `<tr><td>${k}</td><td>${v}</td></tr>`
+  ).join('');
+  // 自动填充出口网卡
+  const ifaceInput = document.getElementById('nat-iface');
+  if (d.default_iface && !ifaceInput.value) ifaceInput.value = d.default_iface;
+}
+
+async function loadOptimize() {
+  const res = await fetch('/api/nat/optimize-status');
+  const data = await res.json();
+  document.getElementById('opt-body').innerHTML = Object.entries(data).map(([k, v]) =>
+    `<tr>
+      <td style="font-family:monospace;font-size:12px">${k}</td>
+      <td>${v.current || '—'}</td>
+      <td>${v.recommended}</td>
+      <td>${v.ok ? '<span class="badge badge-green">✓</span>' : '<span class="badge badge-red">⚠</span>'}</td>
+    </tr>`
+  ).join('');
+}
+
+async function loadRules() {
+  const res = await fetch('/api/nat/rules');
+  const d = await res.json();
+  document.getElementById('rules-box').textContent = d.rules || '(无活跃规则)';
+}
+
+async function stopNat() {
+  if (!confirm('确认停止 SNAT？')) return;
+  await fetch('/nat/stop', {method: 'POST'});
+  location.reload();
+}
+
+async function installNft(btn) {
+  btn.disabled = true; btn.textContent = '安装中…';
+  const es = new EventSource('/nat/install-nft');
+  es.onmessage = e => {
+    if (e.data === '__DONE__') { es.close(); loadEnv(); return; }
+    btn.textContent = '安装中…';
+  };
+  es.onerror = () => { es.close(); loadEnv(); };
+}
+
+loadEnv(); loadOptimize(); loadRules();
+</script>
+</body>
+</html>

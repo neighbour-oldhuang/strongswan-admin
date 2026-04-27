@@ -2,6 +2,11 @@
 set -e
 cd "$(dirname "$0")"
 
+if [ "$(id -u)" -ne 0 ]; then
+  echo "错误：请使用 root 用户运行，例如: sudo bash $0 $*"
+  exit 1
+fi
+
 HOST=${HOST:-0.0.0.0}
 PORT=${PORT:-8080}
 RELOAD=${RELOAD:-1}
@@ -23,7 +28,16 @@ esac
 if [ ! -d .venv ]; then
   echo "Creating virtual environment..."
   python3 -m venv .venv
-  .venv/bin/pip install -q -r requirements.txt
+fi
+
+# 依赖变更时自动同步
+REQ_HASH=$(md5sum requirements.txt 2>/dev/null | cut -d' ' -f1)
+LAST_HASH=""
+[ -f .venv/.req_hash ] && LAST_HASH=$(cat .venv/.req_hash)
+if [ "$REQ_HASH" != "$LAST_HASH" ]; then
+  echo "Installing / updating dependencies..."
+  .venv/bin/pip install -r requirements.txt
+  echo "$REQ_HASH" > .venv/.req_hash
 fi
 
 RELOAD_ARGS=""

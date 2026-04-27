@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
-import store, ctl, shutil, os, re
+import store, ctl, nat, shutil, os, re
 
 app = FastAPI(title="StrongSwan Admin")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -67,6 +67,61 @@ async def route_del(request: Request, dst: str = Form(...), via: str = Form(""),
     if request.headers.get("accept") == "application/json":
         return JSONResponse({"ok": code == 0, "msg": out or err})
     return redirect("/system", out or err or f"路由 {dst} 已删除", code == 0)
+
+# ── NAT management ────────────────────────────────────────────────────────────
+
+@app.get("/nat", response_class=HTMLResponse)
+async def nat_page(request: Request):
+    data = store.load()
+    nat_cfg = data.get("nat", {"subnets": [], "out_iface": "", "proxy_ipsec": False})
+    return templates.TemplateResponse("nat.html", {
+        "request": request, "nat_cfg": nat_cfg,
+        "ok": request.query_params.get("ok"),
+        "err": request.query_params.get("err"),
+    })
+
+@app.get("/api/nat/env")
+async def api_nat_env():
+    return JSONResponse(nat.check_env())
+
+@app.get("/api/nat/rules")
+async def api_nat_rules():
+    return JSONResponse({"rules": nat.get_current_rules()})
+
+@app.get("/api/nat/optimize-status")
+async def api_nat_opt_status():
+    return JSONResponse(nat.get_optimize_status())
+
+@app.post("/nat/apply")
+async def nat_apply(request: Request,
+                    subnets: str = Form(""), out_iface: str = Form(""),
+                    proxy_ipsec: str = Form("")):
+    subnet_list = [s.strip() for s in subnets.splitlines() if s.strip()]
+    iface = out_iface.strip() or nat.check_env().get("default_iface", "")
+    do_proxy = proxy_ipsec == "1"
+    # 持久化配置
+    data = store.load()
+    data["nat"] = {"subnets": subnet_list, "out_iface": iface, "proxy_ipsec": do_proxy}
+    store.save(data)
+    code, out, err = nat.apply_nat(subnet_list, iface, do_proxy)
+    return redirect("/nat", out or err, code == 0)
+
+@app.post("/nat/stop")
+async def nat_stop():
+    code, out, err = nat.stop_nat()
+    return redirect("/nat", out or err, code == 0)
+
+@app.post("/nat/optimize")
+async def nat_optimize():
+    code, out, err = nat.optimize_snat()
+    return redirect("/nat", out or err, code == 0)
+
+@app.get("/nat/install-nft")
+async def nat_install_nft():
+    def stream():
+        yield from (f"data: {line}\n\n" for line in ctl.pkg_install_stream("nftables"))
+        yield "data: __DONE__\n\n"
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 # ── instance control ──────────────────────────────────────────────────────────
 

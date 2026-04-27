@@ -6,7 +6,8 @@ RELOAD_FLAG = Path("data/.needs_reload")
 
 DEFAULT = {
     "instance": {"installed": False, "auto_start": False},
-    "connections": {}
+    "connections": {},
+    "nat": {"subnets": [], "out_iface": "", "proxy_ipsec": False}
 }
 
 def load():
