@@ -110,7 +110,7 @@ def setup(app):
         key_file.parent.mkdir(exist_ok=True)
         key_file.write_text(secret_key)
     app.add_middleware(AuthGuardMiddleware)
-    app.add_middleware(SessionMiddleware, secret_key=secret_key, max_age=86400)
+    app.add_middleware(SessionMiddleware, secret_key=secret_key, max_age=86400, same_site="lax", https_only=False)
 
     @app.get("/auth/login")
     async def login(request: Request):
@@ -124,7 +124,11 @@ def setup(app):
     async def callback(request: Request):
         if not _ensure_registered():
             return RedirectResponse("/")
-        token = await oauth.oidc.authorize_access_token(request)
+        try:
+            token = await oauth.oidc.authorize_access_token(request)
+        except Exception:
+            # state 校验失败（session 丢失/过期），重新登录
+            return RedirectResponse("/auth/login")
         userinfo = token.get("userinfo") or {}
         id_claims = token.get("id_token", {}) if isinstance(token.get("id_token"), dict) else {}
         groups = userinfo.get("groups") or id_claims.get("groups") or []
