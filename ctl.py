@@ -177,6 +177,8 @@ def write_swanctl(connections: dict):
             kt = c["keyingtries"].replace("%forever", "0")
             conn_block.append(f"        keyingtries = {kt}")
         if c.get("ike_rekey"):   conn_block.append(f"        rekey_time = {c['ike_rekey']}")
+        if c.get("over_time"):   conn_block.append(f"        over_time = {c['over_time']}")
+        if c.get("unique"):      conn_block.append(f"        unique = {c['unique']}")
 
         # local auth
         conn_block.append(f"        local {{")
@@ -208,6 +210,7 @@ def write_swanctl(connections: dict):
         if c.get("start_action"):conn_block.append(f"                start_action = {c['start_action']}")
         if c.get("dpd_action"):  conn_block.append(f"                dpd_action = {c['dpd_action']}")
         if c.get("child_rekey"): conn_block.append(f"                rekey_time = {c['child_rekey']}")
+        if c.get("close_action"):conn_block.append(f"                close_action = {c['close_action']}")
         conn_block.append(f"            }}")
         conn_block.append(f"        }}")
         conn_block.append(f"    }}")

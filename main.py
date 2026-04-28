@@ -253,12 +253,15 @@ _COMMON_FIELDS = [
 _ADVANCED_FIELDS = [
     ("local_id",      "本端 ID",        "text",   "",                "IKE 身份标识，留空使用地址"),
     ("remote_id",     "对端 ID",        "text",   "",                "对端身份标识，留空使用地址"),
-    ("dpd_action",    "DPD 动作",       "select", "restart",         "对端失联后动作：clear=清除；restart=重连；none=忽略"),
-    ("dpd_delay",     "DPD 检测间隔(s)","select", "30",              "Dead Peer Detection 心跳间隔秒数"),
-    ("dpd_timeout",   "DPD 超时(s)",    "select", "150",             "超过此时间无响应则触发 DPD 动作"),
+    ("dpd_action",    "DPD 动作",       "select", "restart",         "Dead Peer Detection检测到对端失联后的动作：restart=自动重连（推荐）；clear=清除SA不重连；none=忽略，不做任何处理"),
+    ("dpd_delay",     "DPD 检测间隔(s)","select", "30",              "Dead Peer Detection 心跳间隔秒数，越小检测越快但开销越大，30s适合大多数场景"),
+    ("dpd_timeout",   "DPD 超时(s)",    "select", "150",             "连续无响应超过此时间则判定对端失联并触发DPD动作，建议为dpd_delay的3~5倍"),
     ("keyingtries",   "重协商次数",      "select", "0",               "0=永久重试；3/5=固定次数；swanctl不支持%forever"),
     ("ike_rekey",     "IKE SA 生命周期(s)", "select", "",             "IKE SA 到期后重新协商，留空使用默认值(14400s)，建议比对端短几分钟避免同时rekey"),
     ("child_rekey",   "IPSec SA 生命周期(s)","select", "",            "ESP SA 到期后重新协商，留空使用默认值(3600s)，建议比对端短几分钟"),
+    ("unique",        "重复SA处理",     "select", "",                "对端用新IP重连时如何处理旧SA：replace=立即替换旧SA（推荐拨号/动态IP场景，避免旧SA删除超时导致数分钟断网）；keep=保留旧SA不处理；no=允许同一对端建立多个SA；留空使用默认值(no)"),
+    ("close_action",  "关闭动作",       "select", "",                "对端主动关闭CHILD_SA后本端的动作：start=立即重新发起连接（推荐需要保持隧道常通的场景）；trap=等有流量时再按需触发；none=不处理；留空使用默认值(none)"),
+    ("over_time",     "SA 超时宽限期(s)","select", "",               "IKE rekey发起后，若对端未响应（如正在换IP），额外等待多久才彻底删除SA。例如rekey_time=86400且over_time=3600，则最长等25小时。留空默认为rekey_time的10%，一般无需修改"),
 ]
 
 # policy-based 独有字段
@@ -301,6 +304,9 @@ SELECT_OPTIONS = {
     "keyingtries":  ["0", "3", "5", "10"],
     "ike_rekey":    ["", "13800", "14400", "28800", "82800", "86400"],
     "child_rekey":  ["", "3300", "3600", "7200", "28800"],
+    "unique":       ["", "replace", "keep", "no"],
+    "close_action": ["", "start", "none", "trap"],
+    "over_time":    ["", "1800", "3600", "7200"],
 }
 
 def _fields_for(conn: dict):
