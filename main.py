@@ -58,11 +58,17 @@ async def api_charon():
 @app.post("/api/charon")
 async def api_charon_save(request: Request):
     data = await request.json()
+    changed = False
     for key, val in data.items():
         if key in ctl.CHARON_PARAMS and val:
             code, out, err = ctl.set_charon_param(key, val)
             if code != 0:
                 return JSONResponse({"ok": False, "msg": err})
+            changed = True
+    if changed:
+        code, out, err = ctl.restart()
+        if code != 0:
+            return JSONResponse({"ok": False, "msg": err or "重启失败"})
     return JSONResponse({"ok": True})
 
 @app.get("/api/routes")

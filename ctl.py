@@ -152,7 +152,7 @@ def get_charon_params() -> dict:
     return result
 
 def set_charon_param(key: str, value: str) -> tuple:
-    """修改 charon.conf 中的参数并重启 strongswan"""
+    """修改 charon.conf 中的单个参数（不重启）"""
     conf = _charon_conf()
     if not conf:
         return 1, "", "charon.conf not found"
@@ -166,7 +166,7 @@ def set_charon_param(key: str, value: str) -> tuple:
         if new_content == content:
             return 1, "", f"cannot insert {key}: no charon block in {conf}"
     Path(conf).write_text(new_content)
-    return restart()
+    return 0, "", ""
 
 def get_routes() -> str:
     _, out, _ = run("ip route show")
