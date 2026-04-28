@@ -497,20 +497,22 @@ async def api_sa_status():
     result = {}
     current = None
     detail_lines = []
+    # 状态优先级：ESTABLISHED > REKEYING > CONNECTING > DELETING
+    _prio = {"ESTABLISHED": 4, "REKEYING": 3, "CONNECTING": 2, "DELETING": 1}
     for line in out.splitlines():
-        # 新连接块开始：以连接名开头，如 "myipsec: #1, ESTABLISHED ..."
         m = re.match(r'^(\S+?):\s+#\d+,\s+(\w+)', line)
         if m:
             if current:
-                result[current] = {"state": result[current]["state"], "detail": "\n".join(detail_lines)}
+                result[current]["detail"] += "\n".join(detail_lines)
             current = m.group(1)
-            state = m.group(2)  # ESTABLISHED / CONNECTING / REKEYING / DELETING
-            result[current] = {"state": state, "detail": ""}
+            state = m.group(2)
+            if current not in result or _prio.get(state, 0) > _prio.get(result[current]["state"], 0):
+                result[current] = {"state": state, "detail": ""}
             detail_lines = [line]
         elif current:
             detail_lines.append(line)
     if current:
-        result[current] = {"state": result[current]["state"], "detail": "\n".join(detail_lines)}
+        result[current]["detail"] += "\n".join(detail_lines)
     return JSONResponse(result)
 
 @app.get("/api/status")
