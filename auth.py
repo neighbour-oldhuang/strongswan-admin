@@ -5,6 +5,7 @@
 需要 IdP 在 id_token 或 userinfo 中返回 groups claim。
 """
 import os, secrets
+from pathlib import Path
 os.environ.setdefault("AUTHLIB_INSECURE_TRANSPORT", "1")
 import store
 from authlib.integrations.starlette_client import OAuth
@@ -100,10 +101,14 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
 
 def setup(app):
     """注册 session 中间件、认证路由和全局守卫"""
-    secret_key = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
-    # 注册顺序：后 add 的在外层先执行
-    # AuthGuard 先 add → 内层；Session 后 add → 外层
-    # 请求流: Session → AuthGuard → 路由
+    # 持久化 session key，避免重启后 session 失效
+    key_file = Path("data/.session_key")
+    if key_file.exists():
+        secret_key = key_file.read_text().strip()
+    else:
+        secret_key = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
+        key_file.parent.mkdir(exist_ok=True)
+        key_file.write_text(secret_key)
     app.add_middleware(AuthGuardMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=secret_key, max_age=86400)
 
