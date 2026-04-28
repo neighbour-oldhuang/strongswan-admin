@@ -26,6 +26,21 @@
   </table>
 </div>
 
+<!-- charon 全局参数 -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span class="card-title" style="margin:0">StrongSwan 全局参数</span>
+    <div>
+      <button class="btn btn-primary btn-sm" onclick="saveCharon()">✓ 保存并重启</button>
+      <span id="charon-msg" style="margin-left:8px;font-size:12px"></span>
+    </div>
+  </div>
+  <table id="charon-table" style="font-size:13px">
+    <thead><tr><th>参数</th><th>当前值</th><th>默认值</th><th>说明</th></tr></thead>
+    <tbody id="charon-body"><tr><td colspan="4" style="color:var(--muted)">加载中…</td></tr></tbody>
+  </table>
+</div>
+
 <!-- routes -->
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -130,6 +145,31 @@ async function delRoute(dst, via, dev) {
 loadSysctls();
 loadRoutes();
 loadOidc();
+loadCharon();
+
+async function loadCharon() {
+  const res = await fetch('/api/charon');
+  const data = await res.json();
+  document.getElementById('charon-body').innerHTML = Object.entries(data).map(([k, v]) =>
+    `<tr>
+      <td style="font-family:monospace;font-size:12px">${k}</td>
+      <td><input type="text" data-key="${k}" value="${v.value}" style="width:80px;padding:2px 6px;font-size:13px"></td>
+      <td>${v.default}</td>
+      <td style="font-size:12px;color:var(--muted)">${v.desc}</td>
+    </tr>`
+  ).join('');
+}
+
+async function saveCharon() {
+  const inputs = document.querySelectorAll('#charon-body input[data-key]');
+  const body = {};
+  inputs.forEach(el => body[el.dataset.key] = el.value.trim());
+  const res = await fetch('/api/charon', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const d = await res.json();
+  const msg = document.getElementById('charon-msg');
+  msg.textContent = d.ok ? '✓ 已保存并重启' : '✗ ' + d.msg;
+  msg.style.color = d.ok ? 'var(--accent2)' : 'var(--danger)';
+}
 
 async function loadOidc() {
   const res = await fetch('/api/oidc');

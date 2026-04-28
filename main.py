@@ -51,6 +51,20 @@ async def sysctl_apply():
     code, out, err = ctl.apply_sysctls()
     return redirect("/", out or err or "内核参数已应用并持久化", code == 0)
 
+@app.get("/api/charon")
+async def api_charon():
+    return JSONResponse(ctl.get_charon_params())
+
+@app.post("/api/charon")
+async def api_charon_save(request: Request):
+    data = await request.json()
+    for key, val in data.items():
+        if key in ctl.CHARON_PARAMS and val:
+            code, out, err = ctl.set_charon_param(key, val)
+            if code != 0:
+                return JSONResponse({"ok": False, "msg": err})
+    return JSONResponse({"ok": True})
+
 @app.get("/api/routes")
 async def api_routes():
     return JSONResponse({"routes": ctl.get_routes()})

@@ -10,6 +10,16 @@ def _swanctl_dir() -> str:
 
 SWANCTL_DIR = _swanctl_dir()
 
+def _charon_conf() -> str:
+    for p in (
+        "/etc/strongswan/strongswan.d/charon.conf",  # Debian/Ubuntu apt
+        "/etc/strongswan.d/charon.conf",              # CentOS/RHEL yum, 源码编译
+        "/etc/strongswan/charon.conf",                # 部分发行版
+    ):
+        if Path(p).is_file():
+            return p
+    return ""
+
 def run(cmd: str, input_text: str = None, timeout: int = 15) -> tuple[int, str, str]:
     r = subprocess.run(
         cmd, shell=True, capture_output=True, text=True,
@@ -124,6 +134,39 @@ def apply_sysctls() -> tuple:
     with open(SYSCTL_FILE, "w") as f:
         f.write("\n".join(lines) + "\n")
     return run("sysctl -p " + SYSCTL_FILE)
+
+# ── charon 全局参数 ──────────────────────────────────────────────────────────
+
+CHARON_PARAMS = {
+    "keep_alive": {"default": "20s", "desc": "NAT keepalive 发送间隔，防止运营商NAT映射过期，拨号/CGN场景建议15s"},
+}
+
+def get_charon_params() -> dict:
+    """读取 charon.conf 中的可调参数当前值"""
+    conf = _charon_conf()
+    result = {}
+    content = Path(conf).read_text() if conf else ""
+    for key, meta in CHARON_PARAMS.items():
+        m = re.search(rf'^\s*{key}\s*=\s*(\S+)', content, re.MULTILINE)
+        result[key] = {"value": m.group(1) if m else meta["default"], "default": meta["default"], "desc": meta["desc"]}
+    return result
+
+def set_charon_param(key: str, value: str) -> tuple:
+    """修改 charon.conf 中的参数并重启 strongswan"""
+    conf = _charon_conf()
+    if not conf:
+        return 1, "", "charon.conf not found"
+    content = Path(conf).read_text()
+    pattern = rf'^(\s*)#?\s*{key}\s*=\s*\S+'
+    replacement = rf'\g<1>{key} = {value}'
+    new_content, n = re.subn(pattern, replacement, content, count=1, flags=re.MULTILINE)
+    if n == 0:
+        # 参数不存在，插入到 charon { } 块内
+        new_content = re.sub(r'(charon\s*\{)', rf'\1\n    {key} = {value}', content, count=1)
+        if new_content == content:
+            return 1, "", f"cannot insert {key}: no charon block in {conf}"
+    Path(conf).write_text(new_content)
+    return restart()
 
 def get_routes() -> str:
     _, out, _ = run("ip route show")
