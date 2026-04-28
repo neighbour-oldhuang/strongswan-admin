@@ -257,6 +257,8 @@ _ADVANCED_FIELDS = [
     ("dpd_delay",     "DPD 检测间隔(s)","select", "30",              "Dead Peer Detection 心跳间隔秒数"),
     ("dpd_timeout",   "DPD 超时(s)",    "select", "150",             "超过此时间无响应则触发 DPD 动作"),
     ("keyingtries",   "重协商次数",      "select", "0",               "0=永久重试；3/5=固定次数；swanctl不支持%forever"),
+    ("ike_rekey",     "IKE SA 生命周期(s)", "select", "",             "IKE SA 到期后重新协商，留空使用默认值(14400s)，建议比对端短几分钟避免同时rekey"),
+    ("child_rekey",   "IPSec SA 生命周期(s)","select", "",            "ESP SA 到期后重新协商，留空使用默认值(3600s)，建议比对端短几分钟"),
 ]
 
 # policy-based 独有字段
@@ -297,6 +299,8 @@ SELECT_OPTIONS = {
     "dpd_delay":    ["10", "30", "60", "120"],
     "dpd_timeout":  ["60", "150", "300"],
     "keyingtries":  ["0", "3", "5", "10"],
+    "ike_rekey":    ["", "13800", "14400", "28800", "82800", "86400"],
+    "child_rekey":  ["", "3300", "3600", "7200", "28800"],
 }
 
 def _fields_for(conn: dict):
