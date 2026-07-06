@@ -2,7 +2,12 @@ import subprocess, shutil, re, os
 from pathlib import Path
 
 def _swanctl_dir() -> str:
-    """自动检测 swanctl 配置根目录"""
+    """自动检测 swanctl 配置根目录（根据 swanctl.conf 主文件位置判断）"""
+    # 优先找包含 swanctl.conf 的目录（真正被 swanctl 使用的）
+    for d in ("/etc/strongswan/swanctl", "/etc/swanctl"):
+        if Path(f"{d}/swanctl.conf").is_file():
+            return d
+    # fallback: 目录存在即可
     for d in ("/etc/strongswan/swanctl", "/etc/swanctl"):
         if Path(d).is_dir():
             return d
@@ -242,8 +247,13 @@ def write_swanctl(connections: dict):
         # children (SA)
         conn_block.append(f"        children {{")
         conn_block.append(f"            {name}_child {{")
-        if c.get("local_ts"):    conn_block.append(f"                local_ts = {c['local_ts']}")
-        if c.get("remote_ts"):   conn_block.append(f"                remote_ts = {c['remote_ts']}")
+        if c.get("use_xfrm"):
+            # route-based 必须用 0.0.0.0/0，流量由路由表决定
+            conn_block.append(f"                local_ts = 0.0.0.0/0")
+            conn_block.append(f"                remote_ts = 0.0.0.0/0")
+        else:
+            if c.get("local_ts"):    conn_block.append(f"                local_ts = {c['local_ts']}")
+            if c.get("remote_ts"):   conn_block.append(f"                remote_ts = {c['remote_ts']}")
         if c.get("esp_proposals"):conn_block.append(f"                esp_proposals = {c['esp_proposals']}")
         mode = c.get("mode", "tunnel")
         conn_block.append(f"                mode = {mode}")

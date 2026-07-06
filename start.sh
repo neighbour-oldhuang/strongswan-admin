@@ -7,6 +7,37 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+# Python 版本检测（需要 >= 3.9）
+MIN_MAJOR=3
+MIN_MINOR=9
+PYTHON=""
+for cmd in python3.12 python3.11 python3.10 python3.9 python3; do
+  if command -v "$cmd" &>/dev/null; then
+    ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+    major=${ver%%.*}
+    minor=${ver##*.}
+    if [ "$major" -ge "$MIN_MAJOR" ] 2>/dev/null && [ "$minor" -ge "$MIN_MINOR" ] 2>/dev/null; then
+      PYTHON="$cmd"
+      break
+    fi
+  fi
+done
+if [ -z "$PYTHON" ]; then
+  echo "错误：需要 Python >= ${MIN_MAJOR}.${MIN_MINOR}，当前系统未找到合适版本。"
+  echo ""
+  echo "安装方法："
+  if command -v apt-get &>/dev/null; then
+    echo "  sudo apt-get update && sudo apt-get install -y python3.11"
+  elif command -v dnf &>/dev/null; then
+    echo "  sudo dnf install -y python3.11"
+  elif command -v yum &>/dev/null; then
+    echo "  sudo yum install -y python3.11"
+  else
+    echo "  请手动安装 Python >= ${MIN_MAJOR}.${MIN_MINOR}"
+  fi
+  exit 1
+fi
+
 HOST=${HOST:-0.0.0.0}
 PORT=${PORT:-8080}
 RELOAD=${RELOAD:-1}
@@ -26,8 +57,8 @@ case "$1" in
 esac
 
 if [ ! -d .venv ]; then
-  echo "Creating virtual environment..."
-  python3 -m venv .venv
+  echo "Creating virtual environment with $PYTHON..."
+  $PYTHON -m venv .venv
 fi
 
 # 依赖变更时自动同步

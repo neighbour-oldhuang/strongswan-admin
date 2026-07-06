@@ -6,6 +6,94 @@ from pathlib import Path
 import store, ctl, nat, shutil, os, re, auth
 
 app = FastAPI(title="StrongSwan Admin")
+
+# ── TS 冲突检测 ───────────────────────────────────────────────────────────────
+
+import ipaddress
+
+def _parse_subnets(ts_str: str) -> list:
+    """将逗号分隔的子网字符串解析为 ip_network 列表"""
+    nets = []
+    if not ts_str:
+        return nets
+    for part in ts_str.split(","):
+        part = part.strip()
+        if not part or part == "dynamic":
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            pass
+    return nets
+
+def _nets_overlap(a: ipaddress.IPv4Network, b: ipaddress.IPv4Network) -> bool:
+    """判断两个网段是否有重叠"""
+    return a.overlaps(b)
+
+def check_ts_conflict(connections: dict, current_name: str, new_local_ts: str, new_remote_ts: str) -> str:
+    """
+    检查新连接的 TS 是否与已有 policy-based 连接冲突。
+    返回冲突描述字符串，无冲突返回空字符串。
+    """
+    new_local_nets = _parse_subnets(new_local_ts)
+    new_remote_nets = _parse_subnets(new_remote_ts)
+
+    if not new_remote_nets and not new_local_nets:
+        return ""
+
+    for name, c in connections.items():
+        if name == current_name:
+            continue
+        # 只检查 policy-based 连接（route-based 的 TS 是 dynamic，不冲突）
+        if c.get("use_xfrm"):
+            continue
+
+        existing_local_nets = _parse_subnets(c.get("local_ts", ""))
+        existing_remote_nets = _parse_subnets(c.get("remote_ts", ""))
+
+        # 检查：当 local_ts 有交集且 remote_ts 也有交集时，流量会匹配到多条 policy
+        local_overlap = False
+        remote_overlap = False
+        overlap_detail = []
+
+        for nl in new_local_nets:
+            for el in existing_local_nets:
+                if _nets_overlap(nl, el):
+                    local_overlap = True
+                    break
+            if local_overlap:
+                break
+
+        for nr in new_remote_nets:
+            for er in existing_remote_nets:
+                if _nets_overlap(nr, er):
+                    remote_overlap = True
+                    overlap_detail.append(f"{nr} ↔ {er}")
+                    break
+
+        if local_overlap and remote_overlap:
+            return f"与连接 [{name}] 的流量选择器冲突（remote_ts 重叠: {', '.join(overlap_detail)}），可能导致 IPSec policy 冲突"
+
+    return ""
+
+def check_route_vs_policy_conflict(connections: dict, route_dst: str) -> str:
+    """
+    检查添加的路由目标是否与 policy-based 连接的 remote_ts 冲突。
+    """
+    try:
+        dst_net = ipaddress.ip_network(route_dst.strip(), strict=False)
+    except ValueError:
+        return ""
+
+    for name, c in connections.items():
+        if c.get("use_xfrm"):
+            continue
+        existing_remote_nets = _parse_subnets(c.get("remote_ts", ""))
+        for er in existing_remote_nets:
+            if _nets_overlap(dst_net, er):
+                return f"路由目标 {route_dst} 与 policy-based 连接 [{name}] 的 remote_ts ({er}) 重叠，流量可能被 IPSec policy 拦截"
+
+    return ""
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 auth.setup(app)
@@ -77,6 +165,13 @@ async def api_routes():
 
 @app.post("/system/route/add")
 async def route_add(request: Request, dst: str = Form(...), via: str = Form(""), dev: str = Form("")):
+    # 检查路由目标是否与 policy-based 连接的 remote_ts 冲突
+    data = store.load()
+    conflict = check_route_vs_policy_conflict(data.get("connections", {}), dst.strip())
+    if conflict:
+        if request.headers.get("accept") == "application/json":
+            return JSONResponse({"ok": False, "msg": conflict})
+        return redirect("/system", conflict, False)
     code, out, err = ctl.add_route(dst.strip(), via.strip(), dev.strip())
     if request.headers.get("accept") == "application/json":
         return JSONResponse({"ok": code == 0, "msg": out or err})
@@ -373,6 +468,15 @@ async def conn_create(request: Request):
         return redirect(f"/connections/new/{vpn_type}", "连接名称不能为空", False)
     if name in data["connections"]:
         return redirect(f"/connections/new/{vpn_type}", f"连接 {name} 已存在", False)
+    # TS 冲突检测（仅 policy-based）
+    if vpn_type == "policy":
+        conflict = check_ts_conflict(
+            data["connections"], name,
+            form.get("local_ts", "").strip(),
+            form.get("remote_ts", "").strip(),
+        )
+        if conflict:
+            return redirect(f"/connections/new/{vpn_type}", conflict, False)
     data["connections"][name] = {k: form.get(k, "").strip() for k, *_ in fields + _ADVANCED_FIELDS if k != "name"}
     data["connections"][name]["use_xfrm"] = (vpn_type == "route")
     store.save(data)
@@ -406,6 +510,15 @@ async def conn_update(request: Request, name: str):
         return redirect("/", "连接不存在", False)
     vpn_type = form.get("vpn_type", "policy")
     fields = ROUTE_FIELDS if vpn_type == "route" else POLICY_FIELDS
+    # TS 冲突检测（仅 policy-based）
+    if vpn_type == "policy":
+        conflict = check_ts_conflict(
+            data["connections"], name,
+            form.get("local_ts", "").strip(),
+            form.get("remote_ts", "").strip(),
+        )
+        if conflict:
+            return redirect(f"/connections/{name}/edit", conflict, False)
     data["connections"][name] = {k: form.get(k, "").strip() for k, *_ in fields + _ADVANCED_FIELDS if k != "name"}
     data["connections"][name]["use_xfrm"] = (vpn_type == "route")
     store.save(data)

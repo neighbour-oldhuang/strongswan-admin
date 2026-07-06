@@ -85,7 +85,7 @@
         <div class="actions">
           <a href="/connections/{{ name }}/edit" class="btn btn-ghost btn-sm">编辑</a>
           <a href="/connections/{{ name }}/export" class="btn btn-ghost btn-sm">⬇ 导出</a>
-          {% if c.get('use_xfrm') %}<button class="btn btn-ghost btn-sm" onclick="openRouteModal('{{ c.remote_ts or '' }}','','')">＋路由</button>{% endif %}
+          {% if c.get('use_xfrm') %}<button class="btn btn-ghost btn-sm" onclick="openRouteModal('','','xfrm{{ loop.index }}')">＋路由</button>{% endif %}
           <form method="post" action="/connections/{{ name }}/up" style="display:inline">
             <button class="btn btn-success btn-sm">↑ 连接</button>
           </form>
